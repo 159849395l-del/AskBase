@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Frontend
+node_modules/
+frontend/dist/
+
+# Runtime data
+backend/data/
+!backend/data/.gitkeep
+
+# Environment
+.env
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+Desktop.ini

@@ -1,0 +1,132 @@
+"""ExtractorAgent — LLM 结构化提取"""
+import json
+import time
+from datetime import datetime
+from sqlalchemy import select, func
+from app.crawler.models import CrawlTask, CrawlPage, CrawlResult, AgentLog, TaskStatus, get_crawler_session_factory
+from app.crawler.engine.html_cleaner import HtmlCleaner
+from app.crawler.utils import sha256_hex, safe_json
+from app.crawler.sse_publisher import publish_agent_log, publish_stage_progress, publish_result_new
+from app.crawler.config import CRAWLER_TEXT_CHUNK_LIMIT
+from app.config import settings
+import openai
+
+EXTRACTION_SYSTEM_TEMPLATE = """你是数据提取器。严格按 schema 从给定文本提取数据。
+schema: {schema}
+规则：
+1. 输出 JSON 的字段名必须与 schema 中的 name 完全一致（例如 schema 字段名是 title 就输出 "title"，禁止翻译成"标题"）
+2. 字段缺失填 null；date 转 ISO-8601；数组字段输出数组
+3. 若页面是【列表页】（含多条同类条目，如新闻列表/商品列表），输出 {{"records":[每条一条记录,...]}}，每条记录按 schema 提取
+4. 若页面是单条内容（一篇文章/一件商品），直接输出 schema 对象
+5. 若页面内容与主题无关（无任何可提取条目），输出 {{"__empty__": true}}
+6. 若 schema 含 url/link 字段，从"页面链接列表"中按锚文本匹配对应的链接；匹配不到才填 null
+只输出 JSON。"""
+
+SCHEMA_MARKER_KEYS = ("fields", "dedup_keys")
+
+
+async def execute_extracting(task_id: int):
+    start_ms = int(time.time() * 1000)
+    factory = get_crawler_session_factory()
+    async with factory() as db:
+        log = AgentLog(task_id=task_id, agent="EXTRACTOR", stage="llm_extract", status="RUNNING", started_at=datetime.now())
+        db.add(log)
+        task = await db.get(CrawlTask, task_id)
+        if not task: return None
+        schema = safe_json(task.schema_json) or {"fields":[],"dedup_keys":[]}
+        if not isinstance(schema, dict):
+            schema = {"fields":[],"dedup_keys":[]}
+        field_names = [f["name"] for f in schema.get("fields",[]) if isinstance(f, dict) and f.get("name")]
+        dedup_keys = schema.get("dedup_keys",[])
+        pages = (await db.execute(select(CrawlPage).where(CrawlPage.task_id == task_id, CrawlPage.clean_text != None, CrawlPage.clean_text != "").order_by(CrawlPage.id.asc()))).scalars().all()
+        extracted = set((await db.execute(select(CrawlResult.page_id).where(CrawlResult.task_id == task_id, CrawlResult.status=="VALID"))).scalars().all())
+        valid=0; invalid=0; skipped=0; tokens=0
+        cleaner = HtmlCleaner()
+        for page in pages:
+            if page.id in extracted: continue
+            if not page.clean_text or not page.clean_text.strip(): invalid+=1; continue
+            try:
+                data, used = await _extract_page(task, page, schema, field_names, cleaner)
+                tokens += used
+            except Exception as e:
+                print(f"[Extractor] task={task_id} page={page.id} LLM 抽取失败: {e}")
+                invalid+=1; continue
+            if data is None or data.get("__empty__"):
+                invalid+=1; continue
+            records = data.get("records")
+            if records and isinstance(records, list):
+                for rec in records:
+                    if not isinstance(rec, dict):
+                        continue
+                    rh = _record_hash(rec, dedup_keys, field_names)
+                    exists = await db.scalar(select(func.count()).select_from(CrawlResult).where(CrawlResult.task_id==task_id, CrawlResult.record_hash==rh, CrawlResult.status=="VALID"))
+                    if exists and exists > 0: skipped+=1; continue
+                    r = CrawlResult(task_id=task_id, url=page.url, page_id=page.id, data_json=rec, record_hash=rh, status="VALID", extracted_at=datetime.now())
+                    db.add(r); await db.flush(); await db.refresh(r); valid+=1
+                    summary = str(rec.get(field_names[0],""))[:60] if field_names else ""
+                    await publish_result_new(task_id, r.id, summary)
+            else:
+                if not isinstance(data, dict) or not data:
+                    invalid+=1; continue
+                rh = _record_hash(data, dedup_keys, field_names)
+                exists = await db.scalar(select(func.count()).select_from(CrawlResult).where(CrawlResult.task_id==task_id, CrawlResult.record_hash==rh, CrawlResult.status=="VALID"))
+                if exists and exists > 0: skipped+=1; continue
+                r = CrawlResult(task_id=task_id, url=page.url, page_id=page.id, data_json=data, record_hash=rh, status="VALID", extracted_at=datetime.now())
+                db.add(r); await db.flush(); await db.refresh(r); valid+=1
+                summary = str(data.get(field_names[0],""))[:60] if field_names else ""
+                await publish_result_new(task_id, r.id, summary)
+        task = await db.get(CrawlTask, task_id)
+        if task:
+            stats = safe_json(task.stats_json) or {}
+            stats.update({"extracted":valid+invalid+skipped,"valid":valid,"invalid":invalid,"skipped":skipped})
+            task.stats_json = stats
+            await db.flush()
+            await db.commit()
+        await publish_stage_progress(task_id, "extract", valid+invalid, valid+invalid)
+        log2 = AgentLog(task_id=task_id, agent="EXTRACTOR", stage="llm_extract", status="SUCCESS", cost_tokens=tokens, duration_ms=int(time.time()*1000-start_ms), started_at=datetime.now(), finished_at=datetime.now())
+        db.add(log2)
+        await db.commit()
+        await publish_agent_log(task_id, "EXTRACTOR", "SUCCESS", "llm_extract", tokens)
+        print(f"[Extractor] Task {task_id}: {valid} valid, {invalid} invalid, {skipped} skipped, tokens={tokens}")
+        return None
+
+
+async def _extract_page(task, page, schema, field_names, cleaner):
+    """调用 LLM 抽取单页。成功返回 (data, tokens)；任何失败抛异常，由调用方计 invalid。
+
+    严禁降级为"截断原文塞进字段"——那正是历史版本产生伪数据的根源。
+    """
+    text = page.clean_text[:CRAWLER_TEXT_CHUNK_LIMIT] if page.clean_text else ""
+    links = ""
+    if page.rendered_html:
+        try:
+            cleaned = cleaner.clean(page.rendered_html, page.url)
+            for i, link in enumerate(cleaned.links[:50]):
+                links += f"{link.anchor_text} => {link.url}\n"
+        except: pass
+    client = openai.AsyncOpenAI(api_key=settings.LLM_API_KEY, base_url=settings.LLM_API_BASE)
+    system = EXTRACTION_SYSTEM_TEMPLATE.format(schema=json.dumps(schema, ensure_ascii=False))
+    user = f"来源URL: {page.url}\n正文: {text}"
+    if links: user += f"\n页面链接列表（锚文本 => 链接）:\n{links}"
+    resp = await client.chat.completions.create(model=settings.LLM_MODEL, messages=[{"role":"system","content":system},{"role":"user","content":user}], temperature=0.1, response_format={"type":"json_object"})
+    used = resp.usage.total_tokens if resp.usage else 0
+    content = resp.choices[0].message.content
+    data = json.loads(content)
+    if not isinstance(data, dict):
+        raise ValueError("LLM 输出不是 JSON 对象")
+    if any(k in data for k in SCHEMA_MARKER_KEYS):
+        raise ValueError("LLM 复述了 schema 而非抽取结果")
+    return data, used
+
+
+def _record_hash(data, dedup_keys, field_names):
+    """对齐旧版：去重键缺失/为空时跳过，避免同内容因字段残缺被当成不同记录"""
+    keys = dedup_keys if dedup_keys else (field_names[:1] if field_names else ["title"])
+    parts = []
+    for k in keys:
+        v = data.get(k)
+        if v is not None and str(v) != "":
+            parts.append(str(v))
+    if not parts:
+        return sha256_hex(json.dumps(data, sort_keys=True, ensure_ascii=False))
+    return sha256_hex("|".join(parts))

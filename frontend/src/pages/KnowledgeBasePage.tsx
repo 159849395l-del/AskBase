@@ -12,6 +12,7 @@ import {
   Row,
   Col,
   message,
+  Modal,
   Popconfirm,
   Select,
   theme,
@@ -21,13 +22,21 @@ import {
   UploadOutlined,
   DeleteOutlined,
   ReloadOutlined,
+  CloudSyncOutlined,
   FileTextOutlined,
   DatabaseOutlined,
   InboxOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import type { DocumentItem, KBStatsResponse } from "../types/kb";
-import { listDocuments, uploadDocument, deleteDocument, getKBStats, reindexKB } from "../api/kb";
+import {
+  listDocuments,
+  uploadDocument,
+  deleteDocument,
+  getKBStats,
+  reindexKB,
+  ingestCrawlData,
+} from "../api/kb";
 
 const { Dragger } = Upload;
 const { Title } = Typography;
@@ -46,6 +55,7 @@ const KnowledgeBasePage: React.FC = () => {
   const [stats, setStats] = useState<KBStatsResponse | null>(null);
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
   const [uploading, setUploading] = useState(false);
+  const [syncingCrawl, setSyncingCrawl] = useState(false);
   const { token: themeToken } = theme.useToken();
 
   const fetchDocs = useCallback(async () => {
@@ -110,6 +120,32 @@ const KnowledgeBasePage: React.FC = () => {
     }
   };
 
+  // 同步 ai_crawl 爬虫数据到知识库（读 MySQL → 切分 → 摄入，幂等增量）
+  const handleIngestCrawl = async () => {
+    setSyncingCrawl(true);
+    try {
+      const resp = await ingestCrawlData();
+      message.success("爬虫数据同步完成");
+      // 展示摄入摘要（多行）
+      if (resp.message && resp.message.includes("\n")) {
+        Modal.info({
+          title: "同步结果",
+          width: 560,
+          content: (
+            <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, maxHeight: 360, overflow: "auto" }}>
+              {resp.message}
+            </pre>
+          ),
+        });
+      }
+      fetchDocs();
+      fetchStats();
+    } catch (err: any) {
+      message.error(err.response?.data?.detail || "同步失败，请确认 ai_crawl 的 MySQL 是否可访问");
+    }
+    setSyncingCrawl(false);
+  };
+
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -151,13 +187,6 @@ const KnowledgeBasePage: React.FC = () => {
       dataIndex: "chunk_count",
       key: "chunk_count",
       width: 80,
-    },
-    {
-      title: "品类",
-      dataIndex: "product_category",
-      key: "product_category",
-      width: 100,
-      render: (c: string | null) => c ? <Tag color="green">{c}</Tag> : <Tag>未分类</Tag>,
     },
     {
       title: "状态",
@@ -233,9 +262,21 @@ const KnowledgeBasePage: React.FC = () => {
         style={{ marginBottom: 16 }}
         title="上传文档"
         extra={
-          <Button icon={<ReloadOutlined />} onClick={handleReindex} size="small">
-            重建全量索引
-          </Button>
+          <Space>
+            <Button
+              icon={<CloudSyncOutlined />}
+              onClick={handleIngestCrawl}
+              loading={syncingCrawl}
+              size="small"
+              type="primary"
+              ghost
+            >
+              {syncingCrawl ? "同步中..." : "同步爬虫数据"}
+            </Button>
+            <Button icon={<ReloadOutlined />} onClick={handleReindex} size="small">
+              重建全量索引
+            </Button>
+          </Space>
         }
       >
         <Dragger
@@ -262,23 +303,25 @@ const KnowledgeBasePage: React.FC = () => {
         size="small"
         title="文档列表"
         extra={
-          <Select
-            allowClear
-            placeholder="筛选状态"
-            value={statusFilter}
-            onChange={(v) => {
-              setStatusFilter(v);
-              setPage(1);
-            }}
-            style={{ width: 120 }}
-            size="small"
-            options={[
-              { label: "全部", value: "" },
-              { label: "已索引", value: "indexed" },
-              { label: "处理中", value: "processing" },
-              { label: "失败", value: "failed" },
-            ]}
-          />
+          <Space>
+            <Select
+              allowClear
+              placeholder="筛选状态"
+              value={statusFilter}
+              onChange={(v) => {
+                setStatusFilter(v);
+                setPage(1);
+              }}
+              style={{ width: 120 }}
+              size="small"
+              options={[
+                { label: "全部", value: "" },
+                { label: "已索引", value: "indexed" },
+                { label: "处理中", value: "processing" },
+                { label: "失败", value: "failed" },
+              ]}
+            />
+          </Space>
         }
       >
         <Table

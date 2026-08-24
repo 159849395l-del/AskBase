@@ -11,7 +11,6 @@ class DocumentItem(BaseModel):
     file_size: int
     chunk_count: int
     status: str
-    product_category: Optional[str] = None
     created_at: str
 
     class Config:
@@ -29,7 +28,6 @@ class KBStatsResponse(BaseModel):
     total_documents: int
     total_chunks: int
     total_size_bytes: int
-    by_category: dict
     by_status: dict
     last_ingested_at: Optional[str] = None
 
@@ -38,6 +36,7 @@ class KBSearchResult(BaseModel):
     chunk_text: str
     filename: str
     similarity_score: float
+    score_type: Optional[str] = None  # "vector"=相似度 | "bm25"=关键词匹配
     metadata: dict
 
 

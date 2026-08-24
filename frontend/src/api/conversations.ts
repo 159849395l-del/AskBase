@@ -17,8 +17,14 @@ export async function listConversations(
   return resp.data;
 }
 
-export async function createConversation(title?: string): Promise<ConversationItem> {
-  const resp = await apiClient.post<ConversationItem>("/conversations", { title });
+export async function createConversation(
+  title?: string,
+  agentId?: number
+): Promise<ConversationItem> {
+  const resp = await apiClient.post<ConversationItem>("/conversations", {
+    title,
+    agent_id: agentId,
+  });
   return resp.data;
 }
 

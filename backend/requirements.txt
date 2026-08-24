@@ -23,8 +23,23 @@ openpyxl==3.1.5
 
 chromadb==0.5.23
 
+# 检索优化（BM25 混合检索）
+rank_bm25==0.2.2
+jieba==0.42.1
+
 httpx==0.28.1
 python-dotenv==1.0.1
+
+# 爬虫 MySQL
+PyMySQL==1.2.0
+aiomysql==0.3.2
+
+# 爬虫 HTML 解析
+beautifulsoup4==4.15.0
+lxml==6.1.1
+
+# 爬虫 JS 渲染
+playwright==1.62.0
 
 # 测试
 pytest==8.3.4

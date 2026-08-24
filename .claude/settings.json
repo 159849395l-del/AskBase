@@ -45,7 +45,31 @@
       "Read(//*/frontend/**)",
       "Bash(git init *)",
       "Bash(git reset *)",
-      "Bash(ssh -T git@gitee.com -o StrictHostKeyChecking=no)"
+      "Bash(ssh -T git@gitee.com -o StrictHostKeyChecking=no)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_stress_10users.py -v -s)",
+      "Bash(venv/Scripts/python.exe -m pip install rank_bm25==0.2.2 jieba==0.42.1)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_config.py -q)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_rag_chain.py tests/test_config.py -q)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_dedup.py -q)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_query_rewriter.py tests/test_rag_chain.py tests/test_config.py -q)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_tokenizer.py tests/test_bm25_index.py tests/test_fusion.py tests/test_cache.py tests/test_reranker.py -q)",
+      "Bash(venv/Scripts/python.exe -c ' *)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_query_rewriter.py -v)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_rag_chain.py tests/test_splitter.py tests/test_config.py -q)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/ -q)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/ -q -rs)",
+      "Bash(echo \"tsc exit: $?\")",
+      "Bash(venv/Scripts/python.exe -m pytest tests -m \"not stress\" -q)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_stress_rag_optimized.py -q)",
+      "Bash(venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/uvicorn_smoke.log 2>&1)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_stress_rag_optimized.py -v)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_bm25_index.py tests/test_fusion.py tests/test_retriever.py -q)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_bm25_index.py tests/test_fusion.py -q)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_bm25_index.py -q)",
+      "Bash(venv/Scripts/python.exe -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\([\\(x['id'],x['filename'],x['status']\\) for x in d.get\\('items',[]\\)]\\)\")",
+      "Bash(venv/Scripts/python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000)",
+      "Bash(curl -s http://localhost:8000/api/health)",
+      "Bash(curl -s -o /dev/null -w \"frontend HTTP %{http_code}\\\\n\" http://localhost:5173)"
     ],
     "additionalDirectories": [
       "d:/claude_test/LangChainRAG项目/.claude",
@@ -57,7 +81,8 @@
       "d:/claude_test/LangChainRAG项目/backend/data",
       "d:/claude_test/LangChainRAG项目/backend/data/uploads",
       "d:/claude_test/LangChainRAG项目/backend/data/chromadb",
-      "d:/claude_test/LangChainRAG项目/frontend"
+      "d:/claude_test/LangChainRAG项目/frontend",
+      "\\tmp"
     ]
   },
   "hooks": {

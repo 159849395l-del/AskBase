@@ -12,7 +12,8 @@ export interface StreamCallbacks {
 export function sendChatMessage(
   convId: number,
   content: string,
-  callbacks: StreamCallbacks
+  callbacks: StreamCallbacks,
+  kbDocIds?: number[]
 ): AbortController {
   const controller = new AbortController();
   const token = localStorage.getItem("access_token");
@@ -23,7 +24,10 @@ export function sendChatMessage(
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({
+      content,
+      ...(kbDocIds && kbDocIds.length > 0 ? { kb_doc_ids: kbDocIds } : {}),
+    }),
     signal: controller.signal,
   })
     .then(async (response) => {

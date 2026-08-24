@@ -13,12 +13,24 @@ from app.services.rag_service import ingest_document, rebuild_index
 from app.schemas.kb import DocumentListResponse, DocumentItem, KBStatsResponse, KBSearchResponse, KBSearchResult
 from app.schemas.auth import MessageResponse
 from app.config import settings
-from app.rag.retriever import retrieve_similar_chunks
+from app.rag.retriever import retrieve_with_scores
 import os
+import sys
 import uuid
+import asyncio
 from typing import Optional
 
 router = APIRouter(prefix="/api/kb", tags=["知识库管理"])
+
+# 爬虫数据摄入锁：同一时间只允许一个同步任务
+_ingest_lock: asyncio.Lock | None = None
+
+
+def _get_ingest_lock() -> asyncio.Lock:
+    global _ingest_lock
+    if _ingest_lock is None:
+        _ingest_lock = asyncio.Lock()
+    return _ingest_lock
 
 
 async def _save_upload_file(file: UploadFile) -> tuple:
@@ -33,6 +45,11 @@ async def _save_upload_file(file: UploadFile) -> tuple:
 
     # 验证文件大小
     contents = await file.read()
+    if len(contents) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="文件内容为空，无法上传",
+        )
     if len(contents) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -56,12 +73,11 @@ async def list_docs(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     status: Optional[str] = Query(None),
-    category: Optional[str] = Query(None),
     current_user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     """获取知识文档列表"""
-    items, total = await list_documents(db, page, page_size, status, category)
+    items, total = await list_documents(db, page, page_size, status)
     return DocumentListResponse(items=items, total=total, page=page, page_size=page_size)
 
 
@@ -69,7 +85,6 @@ async def list_docs(
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    product_category: Optional[str] = Form(None),
     current_user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -82,7 +97,6 @@ async def upload_document(
         filename=saved_filename,
         file_type=os.path.splitext(file.filename or "")[1].lower().lstrip("."),
         file_size=os.path.getsize(file_path),
-        product_category=product_category,
         uploaded_by=current_user.id,
         status="processing",
     )
@@ -95,7 +109,6 @@ async def upload_document(
         _background_ingest,
         file_path=file_path,
         filename=saved_filename,
-        product_category=product_category,
         kb_doc_id=kb_doc.id,
     )
 
@@ -106,17 +119,16 @@ async def upload_document(
         file_size=kb_doc.file_size,
         chunk_count=0,
         status="processing",
-        product_category=kb_doc.product_category,
         created_at=kb_doc.created_at,
     )
 
 
-async def _background_ingest(file_path: str, filename: str, product_category: Optional[str], kb_doc_id: int):
+async def _background_ingest(file_path: str, filename: str, kb_doc_id: int):
     """后台任务：文档向量化摄入"""
     from app.database import async_session_factory
     async with async_session_factory() as db:
         try:
-            await ingest_document(file_path, filename, product_category, kb_doc_id, db)
+            await ingest_document(file_path, filename, kb_doc_id, db)
             await db.commit()
             print(f"[Ingest] 文档 {filename} 摄入成功")
         except Exception as e:
@@ -155,6 +167,39 @@ async def reindex(
     return MessageResponse(message=f"重建索引完成，共处理 {total} 个文本块")
 
 
+@router.post("/ingest-crawl", response_model=MessageResponse)
+async def ingest_crawl_data(
+    current_user: User = Depends(get_admin_user),
+):
+    """同步爬虫数据到知识库：读取 ai_crawl 的 MySQL 有效结果，切分+向量化后摄入 ChromaDB（幂等增量）
+
+    实际执行 backend/scripts/ingest_from_aicrawl.py（同一桥接脚本），阻塞等待完成。
+    """
+    async with _get_ingest_lock():
+        # backend 根目录 = app/api/kb.py 向上两级
+        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        script = os.path.join(backend_dir, "scripts", "ingest_from_aicrawl.py")
+        if not os.path.exists(script):
+            raise HTTPException(status_code=500, detail=f"桥接脚本不存在: {script}")
+
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, script,
+            cwd=backend_dir,  # 脚本依赖 cwd 加载 .env 与相对路径
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        stdout, _ = await proc.communicate()
+        output = stdout.decode("utf-8", errors="replace")
+
+        if proc.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"同步失败:\n{output[-1000:]}")
+
+        # 提取关键结果行（摄入统计）
+        tail = [l for l in output.splitlines() if l.strip()][-15:]
+        summary = "\n".join(tail)
+        return MessageResponse(message=f"同步完成\n{summary}")
+
+
 @router.get("/stats", response_model=KBStatsResponse)
 async def kb_stats(
     current_user: User = Depends(get_admin_user),
@@ -167,19 +212,23 @@ async def kb_stats(
 @router.get("/search", response_model=KBSearchResponse)
 async def kb_search(
     q: str = Query(..., min_length=1),
-    category: Optional[str] = Query(None),
+
     top_k: int = Query(5, ge=1, le=20),
     current_user: User = Depends(get_admin_user),
 ):
     """直接语义搜索知识库（调试用）"""
-    docs = await retrieve_similar_chunks(q, top_k=top_k, product_category=category)
+    docs_with_scores = await retrieve_with_scores(
+        q, top_k=top_k
+    )
     results = [
         KBSearchResult(
             chunk_text=doc.page_content[:500],
             filename=doc.metadata.get("filename", "未知"),
-            similarity_score=0.0,  # 简化版不返回分数
+            similarity_score=round(score, 4),
+            score_type=doc.metadata.get("_score_type", "vector"),
+
             metadata=doc.metadata,
         )
-        for doc in docs
+        for doc, score in docs_with_scores
     ]
     return KBSearchResponse(results=results)

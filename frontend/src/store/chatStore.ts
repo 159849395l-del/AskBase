@@ -14,6 +14,7 @@ import { sendChatMessage } from "../api/chat";
 interface ChatState {
   conversations: ConversationItem[];
   activeConversationId: number | null;
+  activeAgentId: number | null;
   messages: MessageItem[];
   streamingContent: string;
   streamingSources: SourceItem[];
@@ -22,19 +23,21 @@ interface ChatState {
   abortController: AbortController | null;
 
   fetchConversations: () => Promise<void>;
-  createNewConversation: () => Promise<number>;
+  createNewConversation: (agentId?: number) => Promise<number>;
   setActiveConversation: (convId: number) => Promise<void>;
   removeConversation: (convId: number) => Promise<void>;
   renameConversation: (convId: number, title: string) => Promise<void>;
-  sendMessage: (content: string) => Promise<void>;
+  sendMessage: (content: string, kbDocIds?: number[]) => Promise<void>;
   stopStreaming: () => void;
   clearMessages: () => void;
+  clearActiveConversation: () => void;
   reset: () => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
   activeConversationId: null,
+  activeAgentId: null,
   messages: [],
   streamingContent: "",
   streamingSources: [],
@@ -52,8 +55,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  createNewConversation: async () => {
-    const conv = await createConversation();
+  createNewConversation: async (agentId?: number) => {
+    const conv = await createConversation(undefined, agentId);
     await get().fetchConversations();
     return conv.id;
   },
@@ -62,7 +65,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ activeConversationId: convId, messages: [], streamingContent: "", streamingSources: [] });
     try {
       const detail = await getConversation(convId);
-      set({ messages: detail.messages });
+      set({ messages: detail.messages, activeAgentId: detail.agent_id ?? null });
     } catch {
       // 会话不存在
     }
@@ -82,7 +85,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await get().fetchConversations();
   },
 
-  sendMessage: async (content: string) => {
+  sendMessage: async (content: string, kbDocIds?: number[]) => {
     const state = get();
     if (!state.activeConversationId || state.isStreaming) return;
 
@@ -103,49 +106,54 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     let fullContent = "";
 
-    const controller = sendChatMessage(state.activeConversationId, content, {
-      onToken: (token) => {
-        fullContent += token;
-        set({ streamingContent: fullContent });
+    const controller = sendChatMessage(
+      state.activeConversationId,
+      content,
+      {
+        onToken: (token) => {
+          fullContent += token;
+          set({ streamingContent: fullContent });
+        },
+        onSources: (sources) => {
+          set({ streamingSources: sources });
+        },
+        onDone: (messageId, tokenCount) => {
+          const assistantMsg: MessageItem = {
+            id: messageId,
+            conversation_id: state.activeConversationId!,
+            role: "assistant",
+            content: fullContent,
+            sources: get().streamingSources,
+            token_count: tokenCount,
+            created_at: new Date().toISOString(),
+          };
+          set((s) => ({
+            messages: [...s.messages, assistantMsg],
+            streamingContent: "",
+            isStreaming: false,
+            abortController: null,
+          }));
+          // 刷新会话列表以更新标题
+          get().fetchConversations();
+        },
+        onError: (error) => {
+          const errorMsg: MessageItem = {
+            id: Date.now(),
+            conversation_id: state.activeConversationId!,
+            role: "assistant",
+            content: `❌ 回答生成失败: ${error}`,
+            created_at: new Date().toISOString(),
+          };
+          set((s) => ({
+            messages: [...s.messages, errorMsg],
+            streamingContent: "",
+            isStreaming: false,
+            abortController: null,
+          }));
+        },
       },
-      onSources: (sources) => {
-        set({ streamingSources: sources });
-      },
-      onDone: (messageId, tokenCount) => {
-        const assistantMsg: MessageItem = {
-          id: messageId,
-          conversation_id: state.activeConversationId!,
-          role: "assistant",
-          content: fullContent,
-          sources: get().streamingSources,
-          token_count: tokenCount,
-          created_at: new Date().toISOString(),
-        };
-        set((s) => ({
-          messages: [...s.messages, assistantMsg],
-          streamingContent: "",
-          isStreaming: false,
-          abortController: null,
-        }));
-        // 刷新会话列表以更新标题
-        get().fetchConversations();
-      },
-      onError: (error) => {
-        const errorMsg: MessageItem = {
-          id: Date.now(),
-          conversation_id: state.activeConversationId!,
-          role: "assistant",
-          content: `❌ 回答生成失败: ${error}`,
-          created_at: new Date().toISOString(),
-        };
-        set((s) => ({
-          messages: [...s.messages, errorMsg],
-          streamingContent: "",
-          isStreaming: false,
-          abortController: null,
-        }));
-      },
-    });
+      kbDocIds ?? undefined,
+    );
 
     set({ abortController: controller });
   },
@@ -179,10 +187,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ messages: [], streamingContent: "", streamingSources: [] });
   },
 
+  // 退出当前会话（回到智能体列表页时调用），清空激活状态与消息
+  clearActiveConversation: () => {
+    set({
+      activeConversationId: null,
+      activeAgentId: null,
+      messages: [],
+      streamingContent: "",
+      streamingSources: [],
+      isStreaming: false,
+      abortController: null,
+    });
+  },
+
   reset: () => {
     set({
       conversations: [],
       activeConversationId: null,
+      activeAgentId: null,
       messages: [],
       streamingContent: "",
       streamingSources: [],

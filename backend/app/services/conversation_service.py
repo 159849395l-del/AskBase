@@ -61,6 +61,7 @@ async def list_conversations(
             id=conv.id,
             title=conv.title,
             is_active=conv.is_active,
+            agent_id=conv.agent_id,
             message_count=msg_count,
             last_message_preview=last_msg.content[:100] if last_msg else None,
             created_at=conv.created_at,
@@ -70,11 +71,17 @@ async def list_conversations(
     return items, total
 
 
-async def create_conversation(db: AsyncSession, user: User, title: Optional[str] = None) -> Conversation:
-    """创建新会话"""
+async def create_conversation(
+    db: AsyncSession,
+    user: User,
+    title: Optional[str] = None,
+    agent_id: Optional[int] = None,
+) -> Conversation:
+    """创建新会话（可选绑定智能体）"""
     conv = Conversation(
         user_id=user.id,
         title=title or "新对话",
+        agent_id=agent_id,
     )
     db.add(conv)
     await db.flush()
@@ -123,6 +130,7 @@ async def get_conversation_detail(
         id=conv.id,
         title=conv.title,
         is_active=conv.is_active,
+        agent_id=conv.agent_id,
         created_at=conv.created_at,
         updated_at=conv.updated_at,
         messages=messages,

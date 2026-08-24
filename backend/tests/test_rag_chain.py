@@ -1,8 +1,13 @@
-"""测试 RAG Chain 组件 — 提示模板、文档格式化、检索器"""
+"""测试 RAG Chain 组件 — 提示模板、文档格式化、检索器、空结果兜底"""
 
 import pytest
 from langchain_core.documents import Document
-from app.rag.chain import format_docs_with_sources, SYSTEM_PROMPT
+from app.rag.chain import (
+    format_docs_with_sources,
+    SYSTEM_PROMPT,
+    build_no_result_events,
+    NO_RESULT_MESSAGE,
+)
 
 
 class TestFormatDocs:
@@ -97,3 +102,27 @@ class TestSystemPrompt:
     def test_提示词_限制不编造信息(self):
         """场景：提示词明确要求不编造信息"""
         assert "不要使用外部知识" in SYSTEM_PROMPT or "不要编造" in SYSTEM_PROMPT
+
+
+class TestNoResultEvents:
+    """空结果兜底 — build_no_result_events"""
+
+    def test_三个事件_顺序为no_results_token_done(self):
+        """场景：空检索结果 → 依次产出 no_results、token、done 三个事件"""
+        events = build_no_result_events()
+
+        assert len(events) == 3
+        assert [e["type"] for e in events] == ["no_results", "token", "done"]
+
+    def test_事件载荷_携带统一提示消息(self):
+        """场景：三个事件的载荷均为 NO_RESULT_MESSAGE"""
+        events = build_no_result_events()
+
+        assert events[0]["message"] == NO_RESULT_MESSAGE
+        assert events[1]["content"] == NO_RESULT_MESSAGE
+        assert events[2]["full_response"] == NO_RESULT_MESSAGE
+
+    def test_空结果消息_为固定提示文案(self):
+        """场景：空结果提示为固定中文文案"""
+        assert "未找到相关资料" in NO_RESULT_MESSAGE
+        assert NO_RESULT_MESSAGE == "知识库中未找到相关资料，请尝试更换关键词或咨询管理员。"

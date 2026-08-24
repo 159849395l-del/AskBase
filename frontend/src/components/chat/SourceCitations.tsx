@@ -23,12 +23,13 @@ const SourceCitations: React.FC<SourceCitationsProps> = ({ sources }) => {
         <FileTextOutlined />
         <Text strong>来源{idx + 1}: </Text>
         <Text>{source.filename}</Text>
-        <Tag color="blue" style={{ fontSize: 11 }}>
-          <PercentageOutlined /> {(source.similarity_score * 100).toFixed(1)}%
-        </Tag>
-        {source.product_category && (
-          <Tag color="green" style={{ fontSize: 11 }}>
-            {source.product_category}
+        {source.score_type === "bm25" ? (
+          <Tag color="orange" style={{ fontSize: 11 }}>
+            关键词命中
+          </Tag>
+        ) : (
+          <Tag color="blue" style={{ fontSize: 11 }}>
+            <PercentageOutlined /> {(source.similarity_score * 100).toFixed(1)}%
           </Tag>
         )}
       </Space>

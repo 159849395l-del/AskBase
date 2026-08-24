@@ -4,12 +4,13 @@ import React, { useState, useEffect } from "react";
 import { Layout, Menu, Button, theme } from "antd";
 import {
   MessageOutlined,
-  PlusOutlined,
   DatabaseOutlined,
+  RobotOutlined,
   UserOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  BugOutlined,
 } from "@ant-design/icons";
 import { useNavigate, useLocation, Outlet } from "react-router-dom";
 import { useAuthStore } from "../../store/authStore";
@@ -36,17 +37,6 @@ const AppLayout: React.FC = () => {
     fetchConversations();
   }, [user?.id]);
 
-  const handleNewChat = async () => {
-    const { createNewConversation, setActiveConversation } = useChatStore.getState();
-    try {
-      const convId = await createNewConversation();
-      await setActiveConversation(convId);
-      navigate(`/chat/${convId}`);
-    } catch {
-      // ignore
-    }
-  };
-
   const menuItems = [
     {
       key: "/chat",
@@ -56,9 +46,19 @@ const AppLayout: React.FC = () => {
     ...(isAdmin
       ? [
           {
+            key: "/admin/agents",
+            icon: <RobotOutlined />,
+            label: "智能体管理",
+          },
+          {
             key: "/admin/kb",
             icon: <DatabaseOutlined />,
             label: "知识库管理",
+          },
+          {
+            key: "/admin/crawler/tasks",
+            icon: <BugOutlined />,
+            label: "爬虫管理",
           },
         ]
       : []),
@@ -87,25 +87,7 @@ const AppLayout: React.FC = () => {
           flexDirection: "column",
         }}
       >
-        {/* 顶部操作区 */}
-        <div
-          style={{
-            padding: "12px 16px",
-            borderBottom: `1px solid ${themeToken.colorBorderSecondary}`,
-          }}
-        >
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={handleNewChat}
-            block
-            size="large"
-          >
-            {!collapsed && "新建会话"}
-          </Button>
-        </div>
-
-        {/* 会话列表 */}
+        {/* 会话列表（同一智能体复用同一会话，无需新建按钮） */}
         <div style={{ flex: 1, overflow: "auto" }}>
           <ConversationList collapsed={collapsed} />
         </div>

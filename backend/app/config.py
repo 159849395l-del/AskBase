@@ -42,15 +42,32 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 800
     CHUNK_OVERLAP: int = 100
     RETRIEVAL_TOP_K: int = 5
-    RETRIEVAL_SCORE_THRESHOLD: float = 0.4
+    # 向量路相似度阈值：混合检索（BM25 兜底精确匹配）下放宽到 0.3 提升召回，
+    # 口语化短查询（如"衣服怎么洗"）更易命中，无关查询仍有 BM25 门槛兜底
+    RETRIEVAL_SCORE_THRESHOLD: float = 0.3
     CHAT_HISTORY_WINDOW: int = 10
+
+    # === 检索优化（混合检索 / 重排 / 改写 / 缓存） ===
+    HYBRID_ENABLED: bool = True        # BM25 + 向量混合检索（RRF 融合）
+    HYBRID_RRF_K: int = 60             # RRF 融合常数 k
+    BM25_TOP_K: int = 5                # BM25 路召回数
+    BM25_TOKENIZER: str = "jieba"      # 中文分词: "jieba" | "char_bigram"（jieba 缺失时的零依赖降级）
+    RERANK_ENABLED: bool = False       # 重排开关
+    RERANK_MODE: str = "bm25"          # "none" | "bm25" | "api"（api 仅占位，暂未实现）
+    RERANK_TOP_N: int = 10             # 重排输入候选数（召回量）
+    RERANK_OUTPUT_K: int = 5           # 重排输出数
+    RERANK_MODEL: str = "gte-rerank-v2" # API 重排模型（百炼）
+    QUERY_REWRITE_ENABLED: bool = False  # 查询改写（结合历史消解指代，多一次 LLM 调用）
+    CACHE_ENABLED: bool = False        # 检索结果缓存
+    CACHE_TTL: int = 300               # 缓存秒数
+    CACHE_MAX_ENTRIES: int = 256
 
     # === 文件上传 ===
     MAX_UPLOAD_SIZE_MB: int = 50
     ALLOWED_EXTENSIONS: str = "txt,md,pdf,docx,csv,xlsx"
 
     # === CORS ===
-    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+    CORS_ORIGINS: str = "http://localhost:5175,http://localhost:3000"
 
     # === Admin 种子数据 ===
     ADMIN_USERNAME: str = "admin"

@@ -11,6 +11,10 @@ build/
 # Frontend
 node_modules/
 frontend/dist/
+frontend/tsconfig.tsbuildinfo
+
+# WorkBuddy local data
+.workbuddy/
 
 # Runtime data
 backend/data/

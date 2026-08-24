@@ -20,14 +20,11 @@ async def list_documents(
     page: int = 1,
     page_size: int = 20,
     status_filter: Optional[str] = None,
-    category_filter: Optional[str] = None,
 ) -> Tuple[List[DocumentItem], int]:
     """获取知识文档列表（分页+筛选）"""
     conditions = []
     if status_filter:
         conditions.append(KnowledgeDocument.status == status_filter)
-    if category_filter:
-        conditions.append(KnowledgeDocument.product_category == category_filter)
 
     # 总数
     count_q = select(func.count()).select_from(KnowledgeDocument)
@@ -52,7 +49,6 @@ async def list_documents(
             file_size=d.file_size,
             chunk_count=d.chunk_count,
             status=d.status,
-            product_category=d.product_category,
             created_at=d.created_at,
         )
         for d in docs
@@ -74,7 +70,6 @@ async def get_document_detail(db: AsyncSession, doc_id: int) -> DocumentItem:
         file_size=doc.file_size,
         chunk_count=doc.chunk_count,
         status=doc.status,
-        product_category=doc.product_category,
         created_at=doc.created_at,
     )
 
@@ -93,10 +88,13 @@ async def delete_document(db: AsyncSession, doc_id: int) -> None:
     except Exception:
         pass  # 向量删除失败不阻塞记录删除
 
-    # 删除上传文件
-    file_path = os.path.join("./data/uploads", doc.filename)
-    if os.path.exists(file_path):
-        os.remove(file_path)
+    # 删除上传文件（失败不阻断——外部来源文档可能无磁盘文件，或权限/占用导致删除失败）
+    try:
+        file_path = os.path.join("./data/uploads", doc.filename)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except Exception as e:
+        print(f"[kb_service] 删除上传文件失败(忽略): {file_path}: {e}")
 
     # 删除数据库记录
     await db.delete(doc)
@@ -122,16 +120,6 @@ async def get_kb_stats(db: AsyncSession) -> KBStatsResponse:
     status_result = await db.execute(status_q)
     by_status = {row[0]: row[1] for row in status_result.all()}
 
-    # 按品类统计
-    cat_q = select(
-        KnowledgeDocument.product_category,
-        func.count(KnowledgeDocument.id)
-    ).where(KnowledgeDocument.product_category.isnot(None)).group_by(
-        KnowledgeDocument.product_category
-    )
-    cat_result = await db.execute(cat_q)
-    by_category = {row[0]: row[1] for row in cat_result.all()}
-
     # 最后摄入时间
     last_q = select(KnowledgeDocument.created_at).where(
         KnowledgeDocument.status == "indexed"
@@ -143,7 +131,6 @@ async def get_kb_stats(db: AsyncSession) -> KBStatsResponse:
         total_documents=row.total,
         total_chunks=row.chunks,
         total_size_bytes=row.size,
-        by_category=by_category,
         by_status=by_status,
         last_ingested_at=last_ingested,
     )

@@ -11,8 +11,16 @@ import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import ChatPage from "./pages/ChatPage";
 import KnowledgeBasePage from "./pages/KnowledgeBasePage";
+import AgentListPage from "./pages/AgentListPage";
+import AgentEditPage from "./pages/AgentEditPage";
 import ProfilePage from "./pages/ProfilePage";
 import NotFoundPage from "./pages/NotFoundPage";
+
+// 爬虫管理页面
+import CrawlerTaskListPage from "./pages/CrawlerTaskListPage";
+import CrawlerTaskCreatePage from "./pages/CrawlerTaskCreatePage";
+import CrawlerTaskDetailPage from "./pages/CrawlerTaskDetailPage";
+import CrawlerResultPage from "./pages/CrawlerResultPage";
 
 // 组件
 import ProtectedRoute from "./components/common/ProtectedRoute";
@@ -58,6 +66,62 @@ const App: React.FC = () => {
                 element={
                   <ProtectedRoute requireAdmin>
                     <KnowledgeBasePage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/admin/agents"
+                element={
+                  <ProtectedRoute requireAdmin>
+                    <AgentListPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/admin/agents/new"
+                element={
+                  <ProtectedRoute requireAdmin>
+                    <AgentEditPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/admin/agents/:id/edit"
+                element={
+                  <ProtectedRoute requireAdmin>
+                    <AgentEditPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/admin/crawler/tasks"
+                element={
+                  <ProtectedRoute requireAdmin>
+                    <CrawlerTaskListPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/admin/crawler/tasks/new"
+                element={
+                  <ProtectedRoute requireAdmin>
+                    <CrawlerTaskCreatePage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/admin/crawler/tasks/:taskId"
+                element={
+                  <ProtectedRoute requireAdmin>
+                    <CrawlerTaskDetailPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/admin/crawler/tasks/:taskId/results/:resultId"
+                element={
+                  <ProtectedRoute requireAdmin>
+                    <CrawlerResultPage />
                   </ProtectedRoute>
                 }
               />

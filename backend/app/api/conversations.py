@@ -4,6 +4,7 @@
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from app.database import get_db
 from app.models.user import User
 from app.core.dependencies import get_current_user
@@ -22,6 +23,7 @@ from app.schemas.conversation import (
     ConversationItem,
 )
 from app.schemas.auth import MessageResponse
+from app.models.agent import Agent
 
 router = APIRouter(prefix="/api/conversations", tags=["会话"])
 
@@ -44,12 +46,21 @@ async def create_conv(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """新建会话"""
-    conv = await create_conversation(db, current_user, body.title)
+    """新建会话（可选绑定智能体）"""
+    # 若指定 agent_id，校验该 agent 存在且启用
+    if body.agent_id is not None:
+        ag = (await db.execute(select(Agent).where(Agent.id == body.agent_id))).scalar_one_or_none()
+        if ag is None or not ag.is_active:
+            raise HTTPException(status_code=400, detail="智能体不存在或未启用")
+        # 用智能体名作为会话标题（如果用户没传 title）
+        if not body.title:
+            body.title = ag.name
+    conv = await create_conversation(db, current_user, body.title, body.agent_id)
     return ConversationItem(
         id=conv.id,
         title=conv.title,
         is_active=conv.is_active,
+        agent_id=conv.agent_id,
         message_count=0,
         last_message_preview=None,
         created_at=conv.created_at,
@@ -91,6 +102,7 @@ async def update_conv(
         id=conv.id,
         title=conv.title,
         is_active=conv.is_active,
+        agent_id=conv.agent_id,
         message_count=0,
         last_message_preview=None,
         created_at=conv.created_at,

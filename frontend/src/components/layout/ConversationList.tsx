@@ -1,13 +1,14 @@
-/** 会话列表组件 */
+/** 会话列表组件：每条只显示标题一行，默认 6 条，更多收进「查看更多」 */
 
-import React from "react";
+import React, { useState } from "react";
 import { List, Typography, Button, Popconfirm, theme } from "antd";
-import { DeleteOutlined, MessageOutlined } from "@ant-design/icons";
+import { DeleteOutlined, MessageOutlined, DownOutlined, UpOutlined } from "@ant-design/icons";
 import { useNavigate, useLocation } from "react-router-dom";
-import dayjs from "dayjs";
 import { useChatStore } from "../../store/chatStore";
 
 const { Text } = Typography;
+
+const MAX_VISIBLE = 6;
 
 interface ConversationListProps {
   collapsed: boolean;
@@ -23,77 +24,86 @@ const ConversationList: React.FC<ConversationListProps> = ({ collapsed }) => {
   const loadingConversations = useChatStore((s) => s.loadingConversations);
   const { token: themeToken } = theme.useToken();
 
+  const [showAll, setShowAll] = useState(false);
+
   const handleSelect = async (convId: number) => {
     await setActiveConversation(convId);
     navigate(`/chat/${convId}`);
   };
 
+  const hasMore = conversations.length > MAX_VISIBLE;
+  const visibleConvs = showAll ? conversations : conversations.slice(0, MAX_VISIBLE);
+  const hiddenCount = conversations.length - MAX_VISIBLE;
+
   return (
-    <List
-      loading={loadingConversations}
-      dataSource={conversations}
-      locale={{ emptyText: "暂无会话" }}
-      renderItem={(item) => {
-        const isActive = item.id === activeId;
-        return (
-          <List.Item
-            key={item.id}
-            onClick={() => handleSelect(item.id)}
-            style={{
-              cursor: "pointer",
-              padding: collapsed ? "12px 8px" : "12px 16px",
-              background: isActive ? themeToken.colorPrimaryBg : "transparent",
-              borderInlineEnd: isActive ? `3px solid ${themeToken.colorPrimary}` : "3px solid transparent",
-              transition: "background 0.2s",
-            }}
-            extra={
-              !collapsed && (
-                <Popconfirm
-                  title="确定删除此会话？"
-                  onConfirm={(e) => {
-                    e?.stopPropagation();
-                    removeConversation(item.id);
-                  }}
-                  onCancel={(e) => e?.stopPropagation()}
-                >
-                  <Button
-                    type="text"
-                    size="small"
-                    danger
-                    icon={<DeleteOutlined />}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                </Popconfirm>
-              )
-            }
-          >
-            <List.Item.Meta
-              avatar={<MessageOutlined style={{ fontSize: 18, color: themeToken.colorPrimary }} />}
-              title={
+    <>
+      <List
+        loading={loadingConversations}
+        dataSource={visibleConvs}
+        locale={{ emptyText: "暂无会话" }}
+        renderItem={(item) => {
+          const isActive = item.id === activeId;
+          return (
+            <List.Item
+              key={item.id}
+              onClick={() => handleSelect(item.id)}
+              style={{
+                cursor: "pointer",
+                padding: collapsed ? "10px 8px" : "10px 16px",
+                background: isActive ? themeToken.colorPrimaryBg : "transparent",
+                borderInlineEnd: isActive ? `3px solid ${themeToken.colorPrimary}` : "3px solid transparent",
+                transition: "background 0.2s",
+              }}
+              extra={
                 !collapsed && (
-                  <Text ellipsis style={{ maxWidth: 200, fontWeight: isActive ? 600 : 400 }}>
-                    {item.title}
+                  <Popconfirm
+                    title="确定删除此会话？"
+                    onConfirm={(e) => {
+                      e?.stopPropagation();
+                      removeConversation(item.id);
+                    }}
+                    onCancel={(e) => e?.stopPropagation()}
+                  >
+                    <Button
+                      type="text"
+                      size="small"
+                      danger
+                      icon={<DeleteOutlined />}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </Popconfirm>
+                )
+              }
+            >
+              <List.Item.Meta
+                avatar={<MessageOutlined style={{ fontSize: 16, color: themeToken.colorPrimary }} />}
+                title={
+                  <Text
+                    ellipsis
+                    style={{ maxWidth: collapsed ? 120 : 180, fontWeight: isActive ? 500 : 400, fontSize: 13, lineHeight: "20px", display: "block" }}
+                  >
+                    {item.title || `会话 #${item.id}`}
                   </Text>
-                )
-              }
-              description={
-                !collapsed && (
-                  <div>
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      {item.last_message_preview || "点击开始对话"}
-                    </Text>
-                    <br />
-                    <Text type="secondary" style={{ fontSize: 11 }}>
-                      {dayjs(item.updated_at).format("MM-DD HH:mm")} · {item.message_count} 条
-                    </Text>
-                  </div>
-                )
-              }
-            />
-          </List.Item>
-        );
-      }}
-    />
+                }
+              />
+            </List.Item>
+          );
+        }}
+      />
+      {!collapsed && hasMore && (
+        <div style={{ padding: "4px 16px 8px", textAlign: "center" }}>
+          <Button
+            type="text"
+            size="small"
+            style={{ fontSize: 12, color: themeToken.colorPrimary }}
+            icon={showAll ? <UpOutlined /> : <DownOutlined />}
+            onClick={() => setShowAll((v) => !v)}
+          >
+            {showAll ? "收起" : `查看更多（${hiddenCount}）`}
+          </Button>
+        </div>
+      )}
+    </>
   );
 };
 

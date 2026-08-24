@@ -21,3 +21,4 @@ async def health_check():
         "database": settings.DATABASE_URL.split("://")[0],
     }
     return health
+

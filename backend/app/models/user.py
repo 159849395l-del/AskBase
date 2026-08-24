@@ -9,6 +9,7 @@ from datetime import datetime
 if TYPE_CHECKING:
     from app.models.conversation import Conversation
     from app.models.knowledge_document import KnowledgeDocument
+    from app.models.agent import Agent
 
 
 def _now() -> str:
@@ -36,6 +37,9 @@ class User(Base):
     )
     knowledge_documents: Mapped[List["KnowledgeDocument"]] = relationship(
         "KnowledgeDocument", back_populates="uploader", cascade="all, delete-orphan"
+    )
+    agents: Mapped[List["Agent"]] = relationship(
+        "Agent", back_populates="creator"
     )
 
     def __repr__(self) -> str:

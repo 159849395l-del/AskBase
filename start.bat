@@ -96,7 +96,7 @@ echo.
 echo [5/5] Starting services...
 echo.
 echo Backend window will open at http://localhost:8000
-echo Frontend window will open at http://localhost:5173
+echo Frontend window will open at http://localhost:5175
 echo.
 echo Login: admin / 123456
 echo.
@@ -110,13 +110,13 @@ cd /d "%PROJECT_DIR%frontend"
 start "RAG-Frontend" cmd /k "npm run dev"
 
 timeout /t 3 /nobreak >nul
-start http://localhost:5173
+start http://localhost:5175
 
 echo.
 echo ============================================
 echo System started. Check the two new windows:
 echo   - RAG-Backend  (port 8000)
-echo   - RAG-Frontend (port 5173)
+echo   - RAG-Frontend (port 5175)
 echo.
 echo Admin login: admin / 123456
 echo ============================================

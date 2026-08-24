@@ -8,6 +8,7 @@ from datetime import datetime
 
 if TYPE_CHECKING:
     from app.models.user import User
+    from app.models.agent import Agent
 
 
 def _now() -> str:
@@ -26,7 +27,6 @@ class KnowledgeDocument(Base):
         String(20), nullable=False, default="processing"
     )  # "processing" | "indexed" | "failed"
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    product_category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     uploaded_by: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[str] = mapped_column(
         String(30), nullable=False, default=_now
@@ -34,6 +34,9 @@ class KnowledgeDocument(Base):
 
     # 关系
     uploader: Mapped["User"] = relationship("User", back_populates="knowledge_documents")
+    agents: Mapped[list] = relationship(
+        "Agent", secondary="agent_knowledge_bases", back_populates="knowledge_documents"
+    )
 
     def __repr__(self) -> str:
         return f"<KnowledgeDocument(id={self.id}, filename='{self.filename}', status='{self.status}')>"

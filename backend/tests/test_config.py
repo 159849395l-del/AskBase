@@ -18,11 +18,24 @@ class TestSettings:
         assert defaults.CHUNK_SIZE == 800
         assert defaults.CHUNK_OVERLAP == 100
         assert defaults.RETRIEVAL_TOP_K == 5
-        assert defaults.RETRIEVAL_SCORE_THRESHOLD == 0.4
+        assert defaults.RETRIEVAL_SCORE_THRESHOLD == 0.3  # 混合检索下放宽以提升召回
         assert defaults.CHAT_HISTORY_WINDOW == 10
         assert defaults.MAX_UPLOAD_SIZE_MB == 50
         assert defaults.JWT_ALGORITHM == "HS256"
         assert defaults.JWT_EXPIRE_MINUTES == 1440
+        # 检索优化
+        assert defaults.HYBRID_ENABLED is True
+        assert defaults.HYBRID_RRF_K == 60
+        assert defaults.BM25_TOP_K == 5
+        assert defaults.BM25_TOKENIZER == "jieba"
+        assert defaults.RERANK_ENABLED is False
+        assert defaults.RERANK_MODE == "bm25"
+        assert defaults.RERANK_TOP_N == 10
+        assert defaults.RERANK_OUTPUT_K == 5
+        assert defaults.QUERY_REWRITE_ENABLED is False
+        assert defaults.CACHE_ENABLED is False
+        assert defaults.CACHE_TTL == 300
+        assert defaults.CACHE_MAX_ENTRIES == 256
 
     def test_管理员种子数据_配置正确(self):
         """场景：管理员用户名和密码已配置"""

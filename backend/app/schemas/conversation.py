@@ -6,6 +6,7 @@ from typing import Optional, List
 
 class ConversationCreate(BaseModel):
     title: Optional[str] = Field(None, max_length=200, description="会话标题，为空则自动生成")
+    agent_id: Optional[int] = Field(None, description="绑定的智能体 ID（为空则用全局默认设置）")
 
 
 class ConversationUpdate(BaseModel):
@@ -16,6 +17,7 @@ class ConversationItem(BaseModel):
     id: int
     title: str
     is_active: bool
+    agent_id: Optional[int] = None
     message_count: int = 0
     last_message_preview: Optional[str] = None
     created_at: str
@@ -36,6 +38,7 @@ class ConversationDetail(BaseModel):
     id: int
     title: str
     is_active: bool
+    agent_id: Optional[int] = None
     created_at: str
     updated_at: str
     messages: List["MessageItem"]

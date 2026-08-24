@@ -4,8 +4,9 @@ export interface SourceItem {
   filename: string;
   chunk_text: string;
   similarity_score: number;
+  /** "vector"=向量相似度 | "bm25"=关键词匹配（非相似度，前端不显示百分比） */
+  score_type?: string | null;
   chunk_index: number;
-  product_category: string | null;
 }
 
 export interface MessageItem {
@@ -22,6 +23,7 @@ export interface ConversationItem {
   id: number;
   title: string;
   is_active: boolean;
+  agent_id?: number | null;
   message_count: number;
   last_message_preview?: string | null;
   created_at: string;
@@ -32,6 +34,7 @@ export interface ConversationDetail {
   id: number;
   title: string;
   is_active: boolean;
+  agent_id?: number | null;
   created_at: string;
   updated_at: string;
   messages: MessageItem[];

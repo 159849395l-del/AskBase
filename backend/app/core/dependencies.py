@@ -82,3 +82,73 @@ async def get_admin_user(
             detail="需要管理员权限",
         )
     return current_user
+
+
+async def get_admin_user_with_token(
+    token: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """从 Header 或 Query 参数获取 JWT token，仅允许 admin 角色访问（用于 SSE 等无法自定义 Header 的场景）"""
+    auth_header = authorization
+    if not auth_header and token:
+        # 如果 query param 提供了 token，构造伪 Header
+        auth_header = f"Bearer {token}"
+
+    if not auth_header:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="未提供认证令牌",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # 解析 Bearer token
+    scheme, _, raw_token = auth_header.partition(" ")
+    if scheme.lower() != "bearer" or not raw_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="认证格式错误，需要 Bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # 解码 JWT
+    payload = decode_access_token(raw_token)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="令牌无效或已过期",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user_id_str = payload.get("sub")
+    if user_id_str is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="令牌缺少用户标识",
+        )
+    try:
+        user_id = int(user_id_str)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="令牌用户标识无效",
+        )
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户不存在",
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="用户已被禁用",
+        )
+    if user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="需要管理员权限",
+        )
+    return user

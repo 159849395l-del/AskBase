@@ -129,4 +129,6 @@ npm run dev
 | `/api/kb/documents/{id}` | GET/DELETE | 文档详情/删除 | admin |
 | `/api/kb/stats` | GET | KB 统计 | admin |
 | `/api/kb/reindex` | POST | 重建索引 | admin |
+| `/api/kb/search` | GET | 检索调试（支持品类过滤） | admin |
+| `/api/categories` | GET | 知识库品类列表（聊天页品类选择器用） | 公开 |
 | `/api/health` | GET | 健康检查 | 公开 |

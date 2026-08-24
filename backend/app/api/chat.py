@@ -10,6 +10,7 @@ from app.database import get_db, async_session_factory
 from app.models.user import User
 from app.models.conversation import Conversation
 from app.models.message import Message
+from app.models.agent import Agent, AgentKnowledgeBase
 from app.core.dependencies import get_current_user
 from app.schemas.chat import MessageCreate
 from app.rag.chain import stream_rag_response
@@ -69,12 +70,31 @@ async def send_message(
 
     is_first_message = len(chat_history) == 0
     if is_first_message:
-        conv.title = await _auto_generate_title(body.content)
+        # 智能体存在时，标题用 agent.name；否则自动生成
+        if conv.agent_id:
+            agent_for_title = (await db.execute(select(Agent).where(Agent.id == conv.agent_id))).scalar_one_or_none()
+            if agent_for_title:
+                conv.title = agent_for_title.name
+        else:
+            conv.title = await _auto_generate_title(body.content)
         db.add(conv)
 
     await db.flush()
 
-    # 4. SSE generator — uses its own DB session to avoid dependency lifecycle issues
+    # 4. 智能体注入：会话绑定 agent 时，覆盖 system_prompt 与 kb_doc_ids（向后兼容：未绑定 agent 时沿用请求 body）
+    kb_doc_ids_saved = body.kb_doc_ids
+    system_prompt_saved = None
+    if conv.agent_id:
+        agent = (await db.execute(select(Agent).where(Agent.id == conv.agent_id))).scalar_one_or_none()
+        if agent:
+            system_prompt_saved = agent.system_prompt
+            # 从关联表取所有 kb_doc_id（用 agent 的限定；空列表=不限制,全库检索）
+            kb_rows = await db.execute(
+                select(AgentKnowledgeBase.kb_doc_id).where(AgentKnowledgeBase.agent_id == agent.id)
+            )
+            kb_doc_ids_saved = [row[0] for row in kb_rows.all()] or None
+
+    # 5. SSE generator — uses its own DB session to avoid dependency lifecycle issues
     conv_id_saved = conv_id
     question_saved = body.content
     history_saved = chat_history
@@ -84,7 +104,12 @@ async def send_message(
         sources = []
 
         try:
-            async for event in stream_rag_response(question_saved, history_saved):
+            async for event in stream_rag_response(
+                question_saved,
+                history_saved,
+                kb_doc_ids=kb_doc_ids_saved,
+                system_prompt=system_prompt_saved,
+            ):
                 if event["type"] == "token":
                     full_response += event["content"]
                     yield f"event: token\ndata: {json.dumps({'token': event['content']}, ensure_ascii=False)}\n\n"
@@ -92,6 +117,10 @@ async def send_message(
                 elif event["type"] == "sources":
                     sources = event["sources"]
                     yield f"event: sources\ndata: {json.dumps({'sources': sources}, ensure_ascii=False)}\n\n"
+
+                elif event["type"] == "no_results":
+                    # 知识库无结果：转发给前端（区别于正常回答）
+                    yield f"event: no_results\ndata: {json.dumps({'message': event['message']}, ensure_ascii=False)}\n\n"
 
                 elif event["type"] == "done":
                     # Persist assistant message in a SEPARATE session to guarantee commit

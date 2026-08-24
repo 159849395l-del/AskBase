@@ -4,9 +4,13 @@ export interface SourceItem {
   filename: string;
   chunk_text: string;
   similarity_score: number;
-  /** "vector"=向量相似度 | "bm25"=关键词匹配（非相似度，前端不显示百分比） */
+  /** "vector"=向量相似度 | "bm25"=关键词匹配（非相似度，前端不显示百分比）| "sql"=SQL 来源 */
   score_type?: string | null;
   chunk_index: number;
+  /** 来源类型：doc（文档/问答/知识点）| sql（生成查询）| db_result（查询结果） */
+  kind?: string | null;
+  /** SQL 来源时携带完整 SQL 语句 */
+  sql?: string | null;
 }
 
 export interface MessageItem {

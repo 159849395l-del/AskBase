@@ -20,11 +20,14 @@ async def list_documents(
     page: int = 1,
     page_size: int = 20,
     status_filter: Optional[str] = None,
+    kb_id: Optional[int] = None,
 ) -> Tuple[List[DocumentItem], int]:
-    """获取知识文档列表（分页+筛选）"""
+    """获取知识文档列表（分页+筛选；kb_id 限定所属知识库）"""
     conditions = []
     if status_filter:
         conditions.append(KnowledgeDocument.status == status_filter)
+    if kb_id is not None:
+        conditions.append(KnowledgeDocument.kb_id == kb_id)
 
     # 总数
     count_q = select(func.count()).select_from(KnowledgeDocument)

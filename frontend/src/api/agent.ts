@@ -40,10 +40,10 @@ export async function getOrCreateAgentConversation(
 
 /**
  * 测试智能体配置（SSE 流式，不落库）。
- * 调用方传入当前草稿的 system_prompt / kb_doc_ids，用于编辑页右侧实时预览。
+ * 调用方传入当前草稿的 system_prompt / kb_ids，用于编辑页右侧实时预览。
  */
 export function testAgentStream(
-  payload: { question: string; system_prompt?: string; kb_doc_ids?: number[]; history?: [string, string][] },
+  payload: { question: string; system_prompt?: string; kb_ids?: number[]; history?: [string, string][] },
   onToken: (t: string) => void,
   onDone: () => void,
   onError: (msg: string) => void

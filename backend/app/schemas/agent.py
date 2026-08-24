@@ -19,7 +19,7 @@ class AgentBase(BaseModel):
 class AgentCreate(AgentBase):
     """创建智能体（管理员）"""
 
-    kb_doc_ids: List[int] = Field(default_factory=list, description="关联的知识文档 ID 列表")
+    kb_ids: List[int] = Field(default_factory=list, description="关联的知识库 ID 列表（数据库型 KB 最多 1 个）")
 
 
 class AgentUpdate(BaseModel):
@@ -33,7 +33,7 @@ class AgentUpdate(BaseModel):
     is_active: Optional[bool] = None
     is_hidden: Optional[bool] = None
     sort_order: Optional[int] = None
-    kb_doc_ids: Optional[List[int]] = Field(None, description="若提供则全量替换关联的知识文档")
+    kb_ids: Optional[List[int]] = Field(None, description="若提供则全量替换关联的知识库")
 
 
 class AgentItem(BaseModel):
@@ -48,7 +48,7 @@ class AgentItem(BaseModel):
     is_hidden: bool = False
     sort_order: int
     created_at: str
-    kb_doc_ids: List[int] = []
+    kb_ids: List[int] = []
 
     class Config:
         from_attributes = True
@@ -59,7 +59,7 @@ class AgentDetail(AgentItem):
 
     system_prompt: str = ""
     updated_at: str = ""
-    kb_doc_ids: List[int] = []
+    kb_ids: List[int] = []
 
 
 class AgentCreateResponse(BaseModel):

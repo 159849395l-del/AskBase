@@ -11,6 +11,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   BugOutlined,
+  ApiOutlined,
 } from "@ant-design/icons";
 import { useNavigate, useLocation, Outlet } from "react-router-dom";
 import { useAuthStore } from "../../store/authStore";
@@ -54,6 +55,11 @@ const AppLayout: React.FC = () => {
             key: "/admin/kb",
             icon: <DatabaseOutlined />,
             label: "知识库管理",
+          },
+          {
+            key: "/admin/datasources",
+            icon: <ApiOutlined />,
+            label: "数据源管理",
           },
           {
             key: "/admin/crawler/tasks",

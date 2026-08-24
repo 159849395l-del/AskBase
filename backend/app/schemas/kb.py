@@ -17,6 +17,36 @@ class DocumentItem(BaseModel):
         from_attributes = True
 
 
+class QAItemCreate(BaseModel):
+    """录入一条问答（A 类知识库）"""
+
+    kb_id: int = Field(..., description="所属知识库 ID")
+    question: str = Field(..., min_length=1, max_length=500)
+    answer: str = Field(..., min_length=1)
+
+
+class QAItemUpdate(BaseModel):
+    question: Optional[str] = Field(None, min_length=1, max_length=500)
+    answer: Optional[str] = Field(None, min_length=1)
+
+
+class QAItem(BaseModel):
+    id: int
+    kb_id: int
+    question: str
+    answer: str
+    created_at: str
+    updated_at: str
+
+    class Config:
+        from_attributes = True
+
+
+class QAItemListResponse(BaseModel):
+    items: List[QAItem]
+    total: int
+
+
 class DocumentListResponse(BaseModel):
     items: List[DocumentItem]
     total: int

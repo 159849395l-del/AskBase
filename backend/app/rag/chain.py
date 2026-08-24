@@ -4,6 +4,7 @@ LangChain RAG 链 — ChatOpenAI + 百炼 MaaS 端点
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from sqlalchemy import select
 from app.config import settings
 from app.rag.retriever import retrieve_with_scores
 from app.rag.query_rewriter import rewrite_query
@@ -102,10 +103,11 @@ async def generate_rag_response(
     question: str,
     chat_history: Optional[list] = None,
     kb_doc_ids: Optional[List[int]] = None,
+    kb_ids: Optional[List[int]] = None,
     system_prompt: Optional[str] = None,
 ) -> dict:
     docs_with_scores = await retrieve_with_scores(
-        question, kb_doc_ids=kb_doc_ids
+        question, kb_doc_ids=kb_doc_ids, kb_ids=kb_ids
     )
     max_score = max((s for _, s in docs_with_scores), default=0.0)
     if not docs_with_scores or max_score < settings.RETRIEVAL_SCORE_THRESHOLD:
@@ -117,10 +119,48 @@ async def generate_rag_response(
     return {"answer": response.content, "sources": sources, "context": context}
 
 
+async def _resolve_kbs(kb_ids: Optional[List[int]]):
+    """解析知识库列表：返回 (文档型/A类 kb_ids, 数据库型/B类 KB 对象或 None)
+
+    在独立 DB 会话中查询（chain 层不持有请求级会话）。
+    """
+    if not kb_ids:
+        return None, None
+    from app.database import async_session_factory
+    from app.models.knowledge_base import KnowledgeBase
+
+    db_kb = None
+    doc_ids = []
+    async with async_session_factory() as db:
+        kbs = (
+            await db.execute(select(KnowledgeBase).where(KnowledgeBase.id.in_(kb_ids)))
+        ).scalars().all()
+        for kb in kbs:
+            if kb.type == "database":
+                db_kb = kb
+            else:
+                doc_ids.append(kb.id)
+    return (doc_ids or None), db_kb
+
+
+def _format_sql_source(sql: str, result_text: str) -> dict:
+    """构造 SQL 来源（供前端"最匹配来源"展示，排在最前）"""
+    return {
+        "kind": "sql",
+        "filename": "生成查询",
+        "sql": sql,
+        "chunk_text": f"{sql}\n\n查询结果:\n{result_text[:800]}",
+        "similarity_score": 1.0,
+        "score_type": "sql",
+        "chunk_index": 0,
+    }
+
+
 async def stream_rag_response(
     question: str,
     chat_history: Optional[list] = None,
     kb_doc_ids: Optional[List[int]] = None,
+    kb_ids: Optional[List[int]] = None,
     system_prompt: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     # 有历史时绕过检索缓存，避免改写查询与裸查询串台
@@ -133,20 +173,68 @@ async def stream_rag_response(
     else:
         effective_question = question
 
-    docs_with_scores = await retrieve_with_scores(
-        effective_question,
-        kb_doc_ids=kb_doc_ids, use_cache=use_cache
-    )
+    # 解析挂载的知识库：A 类（向量检索）+ B 类（数据库查询）
+    doc_kb_ids, db_kb = await _resolve_kbs(kb_ids)
+    # 兼容旧调用：传 kb_doc_ids 时作为文档维度过滤
+    if kb_doc_ids and not kb_ids:
+        doc_kb_ids = None  # 走 kb_doc_ids 过滤路径
 
-    # 无依据兜底（阈值语义）：召回阶段不过滤，这里用最高相似度判断"是否有依据"——
-    # 全部低于阈值视为无答案，直接返回固定提示，不调用 LLM
+    # 并行 3 路：路1/路2 向量检索（A 类文档+问答、B 类知识点）+ 路3 SQL 生成执行
+    import asyncio as _asyncio
+
+    async def _run_vector():
+        return await retrieve_with_scores(
+            effective_question,
+            kb_doc_ids=kb_doc_ids if (kb_doc_ids and not kb_ids) else None,
+            kb_ids=doc_kb_ids,
+            use_cache=use_cache,
+        )
+
+    sql_result = None
+    if db_kb is not None:
+        from app.database import async_session_factory
+        from app.rag.text2sql import run_sql_query
+
+        async def _run_sql():
+            async with async_session_factory() as db:
+                return await run_sql_query(db, db_kb, question, system_prompt or "")
+
+        _vec_task = _asyncio.create_task(_run_vector())
+        sql_result = await _run_sql()
+        docs_with_scores = await _vec_task
+    else:
+        docs_with_scores = await _run_vector()
+
+    # 合并来源：SQL 来源放最前，其后是向量检索来源（文档/问答/知识点）
+    sources = []
+    if sql_result and sql_result.get("sql"):
+        sources.append(_format_sql_source(sql_result["sql"], sql_result.get("result_text", "")))
+
+    context_parts = []
+    if sql_result and sql_result.get("result_text"):
+        # SQL 结果作为"参考文档"最前段（管理员 prompt 会规定如何组织回答）
+        label = f"[来源{len(sources)}: 数据库查询结果]"
+        context_parts.append(f"{label}\n{sql_result['result_text']}")
+        sources.append({
+            "kind": "db_result",
+            "filename": "数据库查询结果",
+            "chunk_text": sql_result["result_text"][:800],
+            "similarity_score": 1.0,
+            "score_type": "sql",
+            "chunk_index": 0,
+        })
+
+    # 无依据兜底（阈值语义）：完全没有检索结果 + 没有 SQL 结果时，返回固定提示
     max_score = max((s for _, s in docs_with_scores), default=0.0)
-    if not docs_with_scores or max_score < settings.RETRIEVAL_SCORE_THRESHOLD:
+    if (not docs_with_scores or max_score < settings.RETRIEVAL_SCORE_THRESHOLD) and not sql_result:
         for evt in build_no_result_events():
             yield evt
         return
 
-    context, sources = format_docs_with_sources(docs_with_scores)
+    docs_context, doc_sources = format_docs_with_sources(docs_with_scores)
+    context_parts.append(docs_context)
+    sources.extend(doc_sources)
+    context = "\n\n".join(p for p in context_parts if p)
     llm = get_llm()
     messages = _build_messages(context, question, history, system_prompt=system_prompt)
 

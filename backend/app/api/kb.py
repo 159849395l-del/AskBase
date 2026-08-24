@@ -4,13 +4,24 @@
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Query, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func
 from app.database import get_db
 from app.models.user import User
 from app.models.knowledge_document import KnowledgeDocument
 from app.core.dependencies import get_admin_user
 from app.services.kb_service import list_documents, get_document_detail, delete_document, get_kb_stats
 from app.services.rag_service import ingest_document, rebuild_index
-from app.schemas.kb import DocumentListResponse, DocumentItem, KBStatsResponse, KBSearchResponse, KBSearchResult
+from app.schemas.kb import (
+    DocumentListResponse,
+    DocumentItem,
+    KBStatsResponse,
+    KBSearchResponse,
+    KBSearchResult,
+    QAItemCreate,
+    QAItemUpdate,
+    QAItem,
+    QAItemListResponse,
+)
 from app.schemas.auth import MessageResponse
 from app.config import settings
 from app.rag.retriever import retrieve_with_scores
@@ -73,11 +84,12 @@ async def list_docs(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     status: Optional[str] = Query(None),
+    kb_id: Optional[int] = Query(None, description="限定所属知识库"),
     current_user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     """获取知识文档列表"""
-    items, total = await list_documents(db, page, page_size, status)
+    items, total = await list_documents(db, page, page_size, status, kb_id)
     return DocumentListResponse(items=items, total=total, page=page, page_size=page_size)
 
 
@@ -85,10 +97,23 @@ async def list_docs(
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    kb_id: int = Form(..., description="所属知识库 ID（A 类文档型）"),
     current_user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """上传文档并后台异步向量化"""
+    """上传文档并后台异步向量化（必须指定所属知识库）"""
+    # 校验知识库存在且为文档型
+    from app.models.knowledge_base import KnowledgeBase
+    from sqlalchemy import select as sa_select
+
+    kb = (
+        await db.execute(sa_select(KnowledgeBase).where(KnowledgeBase.id == kb_id))
+    ).scalar_one_or_none()
+    if kb is None:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    if kb.type != "document":
+        raise HTTPException(status_code=400, detail="只有文档型知识库可以上传文档")
+
     # 保存文件
     file_path, saved_filename = await _save_upload_file(file)
 
@@ -98,6 +123,7 @@ async def upload_document(
         file_type=os.path.splitext(file.filename or "")[1].lower().lstrip("."),
         file_size=os.path.getsize(file_path),
         uploaded_by=current_user.id,
+        kb_id=kb_id,
         status="processing",
     )
     db.add(kb_doc)
@@ -110,6 +136,7 @@ async def upload_document(
         file_path=file_path,
         filename=saved_filename,
         kb_doc_id=kb_doc.id,
+        kb_id=kb_id,
     )
 
     return DocumentItem(
@@ -123,14 +150,14 @@ async def upload_document(
     )
 
 
-async def _background_ingest(file_path: str, filename: str, kb_doc_id: int):
+async def _background_ingest(file_path: str, filename: str, kb_doc_id: int, kb_id: int):
     """后台任务：文档向量化摄入"""
     from app.database import async_session_factory
     async with async_session_factory() as db:
         try:
-            await ingest_document(file_path, filename, kb_doc_id, db)
+            await ingest_document(file_path, filename, kb_doc_id, db, kb_id=kb_id)
             await db.commit()
-            print(f"[Ingest] 文档 {filename} 摄入成功")
+            print(f"[Ingest] 文档 {filename} 摄入成功 (kb={kb_id})")
         except Exception as e:
             await db.rollback()
             print(f"[Ingest] 文档 {filename} 摄入失败: {e}")
@@ -232,3 +259,124 @@ async def kb_search(
         for doc, score in docs_with_scores
     ]
     return KBSearchResponse(results=results)
+
+
+# ---------- 问答集（A 类知识库子资源） ----------
+
+@router.get("/qa", response_model=QAItemListResponse)
+async def list_qa(
+    kb_id: int = Query(..., description="所属知识库 ID"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """问答集列表"""
+    from app.models.qa_item import QAItem as QAModel
+
+    total = (
+        await db.execute(
+            select(func.count(QAModel.id)).where(QAModel.kb_id == kb_id)
+        )
+    ).scalar() or 0
+    q = (
+        select(QAModel)
+        .where(QAModel.kb_id == kb_id)
+        .order_by(QAModel.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    items = (await db.execute(q)).scalars().all()
+    return QAItemListResponse(items=[QAItem.model_validate(x) for x in items], total=total)
+
+
+@router.post("/qa", response_model=QAItem, status_code=201)
+async def create_qa(
+    body: QAItemCreate,
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """录入一条问答并摄入向量（同步完成）"""
+    from app.models.qa_item import QAItem as QAModel
+    from app.models.knowledge_base import KnowledgeBase
+
+    kb = (
+        await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == body.kb_id))
+    ).scalar_one_or_none()
+    if kb is None:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    if kb.type != "document":
+        raise HTTPException(status_code=400, detail="只有文档型知识库支持问答集")
+
+    item = QAModel(
+        kb_id=body.kb_id,
+        question=body.question.strip(),
+        answer=body.answer.strip(),
+        created_by=current_user.id,
+    )
+    db.add(item)
+    await db.flush()
+    await db.refresh(item)
+
+    # 同步摄入 Chroma（结构化条目）
+    from app.services.rag_service import ingest_structured_item
+
+    await ingest_structured_item(
+        kb_id=item.kb_id,
+        kind="qa",
+        item_id=item.id,
+        title=item.question,
+        content=item.answer,
+    )
+    return QAItem.model_validate(item)
+
+
+@router.put("/qa/{qa_id}", response_model=QAItem)
+async def update_qa(
+    qa_id: int,
+    body: QAItemUpdate,
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """更新问答（先删旧向量，再重新摄入）"""
+    from app.models.qa_item import QAItem as QAModel
+    from app.services.rag_service import ingest_structured_item, delete_structured_item_chunks
+
+    item = (await db.execute(select(QAModel).where(QAModel.id == qa_id))).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(status_code=404, detail="问答不存在")
+
+    data = body.model_dump(exclude_unset=True)
+    for k, v in data.items():
+        setattr(item, k, v.strip() if isinstance(v, str) else v)
+    await db.flush()
+    await db.refresh(item)
+
+    await delete_structured_item_chunks("qa", item.id)
+    await ingest_structured_item(
+        kb_id=item.kb_id,
+        kind="qa",
+        item_id=item.id,
+        title=item.question,
+        content=item.answer,
+    )
+    return QAItem.model_validate(item)
+
+
+@router.delete("/qa/{qa_id}", response_model=MessageResponse)
+async def delete_qa(
+    qa_id: int,
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """删除问答（连带删除向量）"""
+    from app.models.qa_item import QAItem as QAModel
+    from app.services.rag_service import delete_structured_item_chunks
+
+    item = (await db.execute(select(QAModel).where(QAModel.id == qa_id))).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(status_code=404, detail="问答不存在")
+    await delete_structured_item_chunks("qa", item.id)
+    await db.delete(item)
+    await db.flush()
+    return MessageResponse(message="问答已删除")

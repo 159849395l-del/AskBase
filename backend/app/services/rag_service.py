@@ -5,9 +5,11 @@ RAG 编排服务 — 文档摄入、检索、生成的全流程协调
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional, Dict, Any, AsyncIterator
+import asyncio
 import hashlib
 import os
 
+from langchain_core.documents import Document
 from app.rag.loader import load_document
 from app.rag.splitter import get_text_splitter
 from app.rag.vector_store import get_vectorstore, reset_vectorstore
@@ -56,6 +58,7 @@ async def ingest_document(
     filename: str,
     kb_doc_id: int,
     db: AsyncSession,
+    kb_id: int | None = None,
 ) -> int:
     """
     摄入单个文档到知识库
@@ -78,6 +81,8 @@ async def ingest_document(
                 "total_chunks": len(chunks),
                 "chunk_hash": _compute_chunk_hash(chunk.page_content),
                 "kb_doc_id": kb_doc_id,
+                "kb_id": kb_id,
+                "kind": "doc",
             })
 
         # 4. 去重：跳过已存在的 chunk_hash（只拉元数据，不拉向量）
@@ -188,6 +193,8 @@ async def rebuild_index(db: AsyncSession) -> int:
                     "total_chunks": len(chunks),
                     "chunk_hash": _compute_chunk_hash(chunk.page_content),
                     "kb_doc_id": kb_doc.id,
+                    "kb_id": kb_doc.kb_id,
+                    "kind": "doc",
                 })
 
             batch_size = 10  # 百炼 text-embedding-v3 单批次上限为 10
@@ -209,3 +216,82 @@ async def rebuild_index(db: AsyncSession) -> int:
     # 重建完成后再次失效，确保索引/缓存与最新数据一致
     _invalidate_indexes()
     return total_chunks
+
+
+# ---------- 问答集 / 知识点（结构化条目）摄入 ----------
+
+def _ingest_item_sync(
+    kb_id: int,
+    kind: str,
+    item_id: int,
+    title: str,
+    content: str,
+    extra_meta: Optional[dict] = None,
+) -> int:
+    """同步摄入一条结构化条目（QA/知识点）为单个 Chroma 块
+
+    - text = 标题 + 正文，便于按语义命中
+    - metadata: kb_id / kind / (qa_id|kp_id) / chunk_hash / filename(展示名)
+    - 返回 0（幂等：同 chunk_hash 已存在则跳过）
+    """
+    text = f"{title}\n\n{content}" if title else content
+    hash_ = hashlib.md5(text.encode("utf-8")).hexdigest()
+    meta: Dict[str, Any] = {
+        "kb_id": kb_id,
+        "kind": kind,
+        "chunk_hash": hash_,
+        "chunk_index": 0,
+        "total_chunks": 1,
+    }
+    if kind == "qa":
+        meta["qa_id"] = item_id
+        meta["filename"] = f"FAQ_{title[:40]}.faq"
+    elif kind == "db_kp":
+        meta["kp_id"] = item_id
+        meta["filename"] = f"KP_{title[:40]}.kp"
+    if extra_meta:
+        meta.update(extra_meta)
+
+    doc = Document(page_content=text, metadata=meta)
+    vs = get_vectorstore()
+    existing = vs._collection.get(include=["metadatas"])
+    ex_hashes = {
+        m["chunk_hash"]
+        for m in (existing.get("metadatas") or [])
+        if m and m.get("chunk_hash")
+    }
+    if hash_ in ex_hashes:
+        return 0
+    vs.add_documents([doc])
+    _invalidate_indexes()
+    return 1
+
+
+async def ingest_structured_item(
+    kb_id: int,
+    kind: str,
+    item_id: int,
+    title: str,
+    content: str,
+    extra_meta: Optional[dict] = None,
+) -> int:
+    """异步包装的结构化条目摄入（QA / 知识点）"""
+    return await asyncio.to_thread(
+        _ingest_item_sync, kb_id, kind, item_id, title, content, extra_meta
+    )
+
+
+def _delete_item_chunks_sync(kind: str, item_id: int) -> None:
+    """按 (kind, item_id) 删除 Chroma 中的结构化条目块"""
+    vs = get_vectorstore()
+    id_field = "qa_id" if kind == "qa" else "kp_id"
+    try:
+        vs._collection.delete(where={id_field: item_id})
+        _invalidate_indexes()
+    except Exception as e:
+        print(f"[rag_service] 删除 {kind} 块失败(忽略): {e}")
+
+
+async def delete_structured_item_chunks(kind: str, item_id: int) -> None:
+    """异步删除结构化条目向量"""
+    await asyncio.to_thread(_delete_item_chunks_sync, kind, item_id)

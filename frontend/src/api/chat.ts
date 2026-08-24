@@ -13,7 +13,7 @@ export function sendChatMessage(
   convId: number,
   content: string,
   callbacks: StreamCallbacks,
-  kbDocIds?: number[]
+  kbIds?: number[]
 ): AbortController {
   const controller = new AbortController();
   const token = localStorage.getItem("access_token");
@@ -26,7 +26,7 @@ export function sendChatMessage(
     },
     body: JSON.stringify({
       content,
-      ...(kbDocIds && kbDocIds.length > 0 ? { kb_doc_ids: kbDocIds } : {}),
+      ...(kbIds && kbIds.length > 0 ? { kb_ids: kbIds } : {}),
     }),
     signal: controller.signal,
   })

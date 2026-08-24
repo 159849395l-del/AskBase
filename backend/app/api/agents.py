@@ -30,7 +30,7 @@ async def _to_item(agent: Agent, kb_ids: List[int]) -> AgentItem:
         is_hidden=agent.is_hidden,
         sort_order=agent.sort_order,
         created_at=agent.created_at,
-        kb_doc_ids=kb_ids,
+        kb_ids=kb_ids,
     )
 
 
@@ -55,7 +55,7 @@ async def list_agents(
     for a in agents:
         # 取关联的 kb_doc_id
         kb_ids = [row[0] for row in (await db.execute(
-            select(AgentKnowledgeBase.kb_doc_id).where(AgentKnowledgeBase.agent_id == a.id)
+            select(AgentKnowledgeBase.kb_id).where(AgentKnowledgeBase.agent_id == a.id)
         )).all()]
         items.append(await _to_item(a, kb_ids))
     return items
@@ -73,7 +73,7 @@ async def get_agent(
     if agent is None or (current_user.role != "admin" and (agent.is_hidden or not agent.is_active)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="智能体不存在")
     kb_ids = [row[0] for row in (await db.execute(
-        select(AgentKnowledgeBase.kb_doc_id).where(AgentKnowledgeBase.agent_id == agent_id)
+        select(AgentKnowledgeBase.kb_id).where(AgentKnowledgeBase.agent_id == agent_id)
     )).all()]
     detail = await _to_detail(agent, kb_ids)
     if current_user.role != "admin":
@@ -99,6 +99,29 @@ async def _ensure_name_unique(db: AsyncSession, name: str, exclude_agent_id: int
         raise HTTPException(status_code=409, detail=f"智能体名称「{name}」已存在，请使用其他名称")
 
 
+async def _validate_kb_ids(db: AsyncSession, kb_ids: List[int]) -> None:
+    """校验知识库存在 + 数据库型（B 类）KB 最多挂载 1 个"""
+    from app.models.knowledge_base import KnowledgeBase
+
+    if not kb_ids:
+        return
+    kbs = (
+        await db.execute(select(KnowledgeBase).where(KnowledgeBase.id.in_(kb_ids)))
+    ).scalars().all()
+    existing_ids = {kb.id for kb in kbs}
+    missing = [x for x in kb_ids if x not in existing_ids]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"知识库不存在: {missing}")
+    db_kbs = [kb for kb in kbs if kb.type == "database"]
+    if len(db_kbs) > 1:
+        names = "、".join(kb.name for kb in db_kbs)
+        raise HTTPException(
+            status_code=400,
+            detail=f"最多只能挂载 1 个数据库型知识库（当前选了 {len(db_kbs)} 个：{names}），"
+                   "否则 SQL 不知道查哪个库/表，请保留 1 个",
+        )
+
+
 @router.post("", response_model=AgentDetail)
 async def create_agent(
     body: AgentCreate,
@@ -106,15 +129,8 @@ async def create_agent(
     admin_user: User = Depends(get_admin_user),
 ):
     """创建智能体（仅管理员）"""
-    # 校验 kb_doc_ids 都存在
-    if body.kb_doc_ids:
-        kb_res = await db.execute(
-            select(KnowledgeDocument.id).where(KnowledgeDocument.id.in_(body.kb_doc_ids))
-        )
-        existing_ids = set(kb_res.scalars().all())
-        missing = [x for x in body.kb_doc_ids if x not in existing_ids]
-        if missing:
-            raise HTTPException(status_code=400, detail=f"知识文档不存在: {missing}")
+    # 校验 kb_ids 都存在 + 数据库型 ≤ 1
+    await _validate_kb_ids(db, body.kb_ids)
 
     # 名称唯一性校验
     await _ensure_name_unique(db, body.name, exclude_agent_id=None)
@@ -131,10 +147,10 @@ async def create_agent(
     )
     db.add(agent)
     await db.flush()
-    for kid in body.kb_doc_ids:
-        db.add(AgentKnowledgeBase(agent_id=agent.id, kb_doc_id=kid))
+    for kid in body.kb_ids:
+        db.add(AgentKnowledgeBase(agent_id=agent.id, kb_id=kid))
     await db.flush()
-    return await _to_detail(agent, list(body.kb_doc_ids))
+    return await _to_detail(agent, list(body.kb_ids))
 
 
 @router.put("/{agent_id}", response_model=AgentDetail)
@@ -151,7 +167,7 @@ async def update_agent(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="智能体不存在")
 
     data = body.model_dump(exclude_unset=True)
-    kb_ids_update = data.pop("kb_doc_ids", None)
+    kb_ids_update = data.pop("kb_ids", None)
     # 名称唯一性校验（排除自身）
     if "name" in data:
         data["name"] = _sanitize_html(data["name"])
@@ -165,14 +181,7 @@ async def update_agent(
 
     if kb_ids_update is not None:
         # 全量替换
-        if kb_ids_update:
-            kb_res = await db.execute(
-                select(KnowledgeDocument.id).where(KnowledgeDocument.id.in_(kb_ids_update))
-            )
-            existing_ids = set(kb_res.scalars().all())
-            missing = [x for x in kb_ids_update if x not in existing_ids]
-            if missing:
-                raise HTTPException(status_code=400, detail=f"知识文档不存在: {missing}")
+        await _validate_kb_ids(db, kb_ids_update)
         # 删旧关联
         old = await db.execute(
             select(AgentKnowledgeBase).where(AgentKnowledgeBase.agent_id == agent_id)
@@ -181,12 +190,12 @@ async def update_agent(
             await db.delete(row)
         # 加新关联
         for kid in kb_ids_update:
-            db.add(AgentKnowledgeBase(agent_id=agent_id, kb_doc_id=kid))
+            db.add(AgentKnowledgeBase(agent_id=agent_id, kb_id=kid))
 
     await db.flush()
     # 取最新 kb_ids
     kb_ids = [row[0] for row in (await db.execute(
-        select(AgentKnowledgeBase.kb_doc_id).where(AgentKnowledgeBase.agent_id == agent_id)
+        select(AgentKnowledgeBase.kb_id).where(AgentKnowledgeBase.agent_id == agent_id)
     )).all()]
     return await _to_detail(agent, kb_ids)
 
@@ -259,7 +268,7 @@ import json
 class AgentTestRequest(BaseModel):
     question: str = Field(..., min_length=1)
     system_prompt: Optional[str] = None
-    kb_doc_ids: List[int] = Field(default_factory=list)
+    kb_ids: List[int] = Field(default_factory=list)
     history: List[List[str]] = Field(default_factory=list, description='[["human","问题"],["ai","回答"]]')
 
 
@@ -268,7 +277,7 @@ async def test_agent(
     body: AgentTestRequest,
     admin_user: User = Depends(get_admin_user),
 ):
-    """测试智能体配置（仅管理员）：用当前草稿的 system_prompt + kb_doc_ids 直接问答，SSE 流式返回，不落库"""
+    """测试智能体配置（仅管理员）：用当前草稿的 system_prompt + kb_ids 直接问答，SSE 流式返回，不落库"""
     history = [(h[0], h[1]) for h in body.history if len(h) == 2]
 
     async def event_stream():
@@ -276,7 +285,7 @@ async def test_agent(
             async for event in stream_rag_response(
                 body.question,
                 history,
-                kb_doc_ids=body.kb_doc_ids or None,
+                kb_ids=body.kb_ids or None,
                 system_prompt=body.system_prompt,
             ):
                 if event["type"] == "token":

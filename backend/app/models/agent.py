@@ -9,6 +9,7 @@ from datetime import datetime
 if TYPE_CHECKING:
     from app.models.user import User
     from app.models.knowledge_document import KnowledgeDocument
+    from app.models.knowledge_base import KnowledgeBase
     from app.models.conversation import Conversation
 
 
@@ -34,12 +35,11 @@ class Agent(Base):
     created_at: Mapped[str] = mapped_column(String(30), nullable=False, default=_now)
     updated_at: Mapped[str] = mapped_column(String(30), nullable=False, default=_now, onupdate=_now)
 
-    # 关系：创建者、关联的知识文档（多对多）、关联的会话
+    # 关系：创建者、关联的知识库（多对多，粒度=知识库）、关联的会话
     creator: Mapped["User"] = relationship("User", back_populates="agents")
-    knowledge_documents: Mapped[List["KnowledgeDocument"]] = relationship(
-        "KnowledgeDocument",
-        secondary="agent_knowledge_bases",
-        back_populates="agents",
+    knowledge_bases: Mapped[List["KnowledgeBase"]] = relationship(
+        "KnowledgeBase",
+        secondary="agent_kbs",
     )
     conversations: Mapped[List["Conversation"]] = relationship(
         "Conversation", back_populates="agent"
@@ -50,13 +50,13 @@ class Agent(Base):
 
 
 class AgentKnowledgeBase(Base):
-    """智能体 ↔ 知识文档 关联表（多对多）"""
+    """智能体 ↔ 知识库 关联表（多对多，Phase 5 起使用；旧表 agent_knowledge_bases 保留待迁移）"""
 
-    __tablename__ = "agent_knowledge_bases"
+    __tablename__ = "agent_kbs"
 
     agent_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True
     )
-    kb_doc_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("knowledge_documents.id", ondelete="CASCADE"), primary_key=True
+    kb_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("knowledge_bases.id", ondelete="CASCADE"), primary_key=True
     )

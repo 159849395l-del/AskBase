@@ -56,10 +56,13 @@ class BM25Index:
         query: str,
         top_k: int,
         kb_doc_ids: Optional[List[int]] = None,
+        kb_ids: Optional[List[int]] = None,
     ) -> List[Tuple[Document, float]]:
-        """BM25 检索：先全量打分，再按作用域(kb_doc_ids)过滤，最后取 top_k
+        """BM25 检索：先全量打分，再按作用域(kb_doc_ids / kb_ids)过滤，最后取 top_k
 
-        kb_doc_ids 为 None 时不过滤，等价于全库检索。
+        - kb_ids 非空：按 metadata.kb_id 过滤（知识库维度）
+        - 否则 kb_doc_ids 非空：按 metadata.kb_doc_id 过滤（文档维度，旧兼容）
+        - 两者都为空：不过滤，等价于全库检索
         """
         if BM25Plus is None:
             raise ImportError("rank_bm25 未安装，无法执行 BM25 检索")
@@ -67,14 +70,18 @@ class BM25Index:
             # 空语料 / 尚未构建
             return []
 
-        allowed = set(int(x) for x in kb_doc_ids) if kb_doc_ids else None
+        allowed_kb = set(int(x) for x in kb_ids) if kb_ids else None
+        allowed_doc = set(int(x) for x in kb_doc_ids) if kb_doc_ids else None
         tokenizer = get_tokenizer()
         tokens = tokenizer(query)
         scores = self._bm25.get_scores(tokens)
 
         scored = []
         for i, (doc, score) in enumerate(zip(self._docs, scores)):
-            if allowed is not None and doc.metadata.get("kb_doc_id") not in allowed:
+            meta = doc.metadata
+            if allowed_kb is not None and meta.get("kb_id") not in allowed_kb:
+                continue
+            if allowed_kb is None and allowed_doc is not None and meta.get("kb_doc_id") not in allowed_doc:
                 continue
             if not self._is_real_hit(tokens, i, len(query)):
                 continue

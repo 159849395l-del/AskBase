@@ -17,7 +17,7 @@ import {
 import { SaveOutlined, RollbackOutlined, SendOutlined } from "@ant-design/icons";
 import { useParams, useNavigate } from "react-router-dom";
 import { getAgent, createAgent, updateAgent, testAgentStream } from "../api/agent";
-import { listDocuments } from "../api/kb";
+import { listKnowledgeBases } from "../api/knowledgeBases";
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -31,7 +31,7 @@ interface AgentFormValues {
   is_active: boolean;
   is_hidden: boolean;
   sort_order: number;
-  kb_doc_ids: number[];
+  kb_ids: number[];
 }
 
 interface PreviewMsg {
@@ -57,11 +57,14 @@ const AgentEditPage: React.FC = () => {
   const previewEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // 知识库选项（后端 page_size 上限 100）
-    listDocuments(1, 100)
-      .then((resp) =>
+    // 知识库选项（挂载粒度=知识库，而非文档）
+    listKnowledgeBases()
+      .then((kbs) =>
         setKbOptions(
-          resp.items.map((d) => ({ label: `${d.filename} (${d.chunk_count}块)`, value: d.id }))
+          kbs.map((kb) => ({
+            label: `${kb.name}${kb.type === "database" ? "（数据库型）" : ""}`,
+            value: kb.id,
+          }))
         )
       )
       .catch(() => {});
@@ -78,7 +81,7 @@ const AgentEditPage: React.FC = () => {
             is_active: agent.is_active,
             is_hidden: agent.is_hidden,
             sort_order: agent.sort_order,
-            kb_doc_ids: agent.kb_doc_ids,
+            kb_ids: agent.kb_ids,
           });
           setIconValue(agent.icon || "🤖");
           setLoading(false);
@@ -140,7 +143,7 @@ const AgentEditPage: React.FC = () => {
       {
         question: q,
         system_prompt: draft.system_prompt,
-        kb_doc_ids: draft.kb_doc_ids || [],
+        kb_ids: draft.kb_ids || [],
         history,
       },
       (token) => {
@@ -213,7 +216,7 @@ const AgentEditPage: React.FC = () => {
             is_active: true,
             is_hidden: false,
             sort_order: 0,
-            kb_doc_ids: [],
+            kb_ids: [],
           }}>
             <Form.Item name="name" label="名称" rules={[{ required: true, message: "请输入名称" }]}>
               <Input placeholder="如：招生问答助手" maxLength={100} />
@@ -270,13 +273,13 @@ const AgentEditPage: React.FC = () => {
             </Form.Item>
 
             <Form.Item
-              name="kb_doc_ids"
+              name="kb_ids"
               label="关联知识库"
-              extra="勾选后该智能体只从这些知识库中检索作答；不选则检索全部知识库"
+              extra="勾选后该智能体只从这些知识库中检索作答；数据库型知识库最多选 1 个（多个会导致 SQL 不知道查哪个库/表）"
             >
               <Select
                 mode="multiple"
-                placeholder="选择知识库（可多选）"
+                placeholder="选择知识库（可多选，数据库型最多 1 个）"
                 options={kbOptions}
                 allowClear
               />

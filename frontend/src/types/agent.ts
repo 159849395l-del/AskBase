@@ -10,7 +10,7 @@ export interface AgentItem {
   is_hidden: boolean;
   sort_order: number;
   created_at: string;
-  kb_doc_ids: number[];
+  kb_ids: number[];
 }
 
 export interface AgentDetail extends AgentItem {
@@ -27,5 +27,5 @@ export interface AgentPayload {
   is_active?: boolean;
   is_hidden?: boolean;
   sort_order?: number;
-  kb_doc_ids?: number[];
+  kb_ids?: number[];
 }

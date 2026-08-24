@@ -6,8 +6,8 @@ from typing import Optional, List, Any
 
 class MessageCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=8000, description="用户消息内容（上限 8000 字）")
-    kb_doc_ids: Optional[List[int]] = Field(
-        None, description="可选知识库作用域（限定检索的 kb_doc_id 集合）；为空则全库检索"
+    kb_ids: Optional[List[int]] = Field(
+        None, description="可选知识库作用域（限定检索的 kb_id 集合）；为空则全库检索"
     )
 
 

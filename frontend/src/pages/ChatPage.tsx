@@ -84,7 +84,7 @@ const ChatPage: React.FC = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingContent]);
 
-  const handleSend = async (content: string, kbDocIds?: number[]) => {
+  const handleSend = async (content: string, kbIds?: number[]) => {
     if (!activeConversationId) {
       // 无会话时（不应到达这里：入口必须点智能体卡片）
       const { createNewConversation, setActiveConversation } = useChatStore.getState();
@@ -92,12 +92,12 @@ const ChatPage: React.FC = () => {
       await setActiveConversation(newId);
       navigate(`/chat/${newId}`, { replace: true });
       setTimeout(() => {
-        useChatStore.getState().sendMessage(content, kbDocIds);
+        useChatStore.getState().sendMessage(content, kbIds);
       }, 100);
     } else {
       // agent 会话由后端注入设置；普通会话传前端选择的知识库
       const viaAgent = !!activeAgentId;
-      await sendMessage(content, viaAgent ? undefined : kbDocIds);
+      await sendMessage(content, viaAgent ? undefined : kbIds);
     }
   };
 

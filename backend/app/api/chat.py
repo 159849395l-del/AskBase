@@ -82,7 +82,7 @@ async def send_message(
     await db.flush()
 
     # 4. 智能体注入：会话绑定 agent 时，覆盖 system_prompt 与 kb_doc_ids（向后兼容：未绑定 agent 时沿用请求 body）
-    kb_doc_ids_saved = body.kb_doc_ids
+    kb_ids_saved = body.kb_ids
     system_prompt_saved = None
     if conv.agent_id:
         agent = (await db.execute(select(Agent).where(Agent.id == conv.agent_id))).scalar_one_or_none()
@@ -90,9 +90,9 @@ async def send_message(
             system_prompt_saved = agent.system_prompt
             # 从关联表取所有 kb_doc_id（用 agent 的限定；空列表=不限制,全库检索）
             kb_rows = await db.execute(
-                select(AgentKnowledgeBase.kb_doc_id).where(AgentKnowledgeBase.agent_id == agent.id)
+                select(AgentKnowledgeBase.kb_id).where(AgentKnowledgeBase.agent_id == agent.id)
             )
-            kb_doc_ids_saved = [row[0] for row in kb_rows.all()] or None
+            kb_ids_saved = [row[0] for row in kb_rows.all()] or None
 
     # 5. SSE generator — uses its own DB session to avoid dependency lifecycle issues
     conv_id_saved = conv_id
@@ -107,7 +107,7 @@ async def send_message(
             async for event in stream_rag_response(
                 question_saved,
                 history_saved,
-                kb_doc_ids=kb_doc_ids_saved,
+                kb_ids=kb_ids_saved,
                 system_prompt=system_prompt_saved,
             ):
                 if event["type"] == "token":

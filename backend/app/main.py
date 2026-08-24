@@ -13,6 +13,9 @@ from app.api.chat import router as chat_router
 from app.api.kb import router as kb_router
 from app.api.system import router as system_router
 from app.api.agents import router as agents_router
+from app.api.data_sources import router as data_sources_router
+from app.api.knowledge_bases import router as knowledge_bases_router
+from app.api.kb_tables import router as kb_tables_router
 from app.crawler.api.tasks import router as crawler_tasks_router
 from app.crawler.api.results import router as crawler_results_router
 from app.crawler.api.schedule import router as crawler_schedule_router
@@ -57,6 +60,16 @@ async def lifespan(app: FastAPI):
             if "duplicate column" not in str(e).lower():
                 raise
 
+        # 兼容迁移：knowledge_documents 表加 kb_id 列（归属知识库；历史数据保持 NULL 待迁移）
+        try:
+            await conn.execute(text(
+                "ALTER TABLE knowledge_documents ADD COLUMN kb_id INTEGER REFERENCES knowledge_bases(id)"
+            ))
+            print("[Startup] 已给 knowledge_documents 表添加 kb_id 列")
+        except Exception as e:
+            if "duplicate column" not in str(e).lower():
+                raise
+
     # 种子管理员账户
     async with async_session_factory() as session:
         await seed_admin(session)
@@ -90,6 +103,9 @@ app.include_router(chat_router)
 app.include_router(kb_router)
 app.include_router(system_router)
 app.include_router(agents_router)
+app.include_router(data_sources_router)
+app.include_router(knowledge_bases_router)
+app.include_router(kb_tables_router)
 app.include_router(crawler_tasks_router)
 app.include_router(crawler_results_router)
 app.include_router(crawler_schedule_router)

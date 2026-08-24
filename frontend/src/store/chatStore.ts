@@ -27,7 +27,7 @@ interface ChatState {
   setActiveConversation: (convId: number) => Promise<void>;
   removeConversation: (convId: number) => Promise<void>;
   renameConversation: (convId: number, title: string) => Promise<void>;
-  sendMessage: (content: string, kbDocIds?: number[]) => Promise<void>;
+  sendMessage: (content: string, kbIds?: number[]) => Promise<void>;
   stopStreaming: () => void;
   clearMessages: () => void;
   clearActiveConversation: () => void;
@@ -85,7 +85,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await get().fetchConversations();
   },
 
-  sendMessage: async (content: string, kbDocIds?: number[]) => {
+  sendMessage: async (content: string, kbIds?: number[]) => {
     const state = get();
     if (!state.activeConversationId || state.isStreaming) return;
 
@@ -152,7 +152,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }));
         },
       },
-      kbDocIds ?? undefined,
+      kbIds ?? undefined,
     );
 
     set({ abortController: controller });

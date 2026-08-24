@@ -24,12 +24,15 @@ def _cache_key(
     top_k: int,
     score_threshold: float,
     kb_doc_ids: Optional[List[int]] = None,
+    kb_ids: Optional[List[int]] = None,
 ) -> tuple:
     """构造缓存键（配置开关变化时缓存自然失效）"""
-    scope = tuple(sorted(int(x) for x in kb_doc_ids)) if kb_doc_ids else None
+    scope_doc = tuple(sorted(int(x) for x in kb_doc_ids)) if kb_doc_ids else None
+    scope_kb = tuple(sorted(int(x) for x in kb_ids)) if kb_ids else None
     return (
         query,
-        scope,
+        scope_doc,
+        scope_kb,
         top_k,
         score_threshold,
         settings.HYBRID_ENABLED,
@@ -56,9 +59,22 @@ def _bm25_search_sync(
     query: str,
     top_k: int,
     kb_doc_ids: Optional[List[int]] = None,
+    kb_ids: Optional[List[int]] = None,
 ) -> List[Tuple[Document, float]]:
     """BM25 检索（同步执行，调用方负责 to_thread 包装）"""
-    return get_bm25_index().search(query, top_k, kb_doc_ids)
+    return get_bm25_index().search(query, top_k, kb_doc_ids, kb_ids)
+
+
+def _build_scope_filter(
+    kb_doc_ids: Optional[List[int]],
+    kb_ids: Optional[List[int]],
+) -> Optional[dict]:
+    """构造 ChromaDB 过滤条件：kb_ids（知识库维度）优先，其次 kb_doc_ids（旧兼容）"""
+    if kb_ids:
+        return {"kb_id": {"$in": [int(x) for x in kb_ids]}}
+    if kb_doc_ids:
+        return {"kb_doc_id": {"$in": [int(x) for x in kb_doc_ids]}}
+    return None
 
 
 async def retrieve_with_scores(
@@ -66,6 +82,7 @@ async def retrieve_with_scores(
     top_k: Optional[int] = None,
     score_threshold: Optional[float] = None,
     kb_doc_ids: Optional[List[int]] = None,
+    kb_ids: Optional[List[int]] = None,
     use_cache: bool = True,
 ) -> List[Tuple[Document, float]]:
     """检索并返回 (Document, score) 元组，用于引用展示（异步）
@@ -73,8 +90,9 @@ async def retrieve_with_scores(
     流程：缓存查询 → 向量路召回 → BM25 路召回（可选）→ RRF 融合 → 重排（可选）→ 展示分数
 
     作用域：
-      - kb_doc_ids 非空时，仅在指定知识库集合内检索（智能体/会话绑定 KB 的轻量实现）；
-        None 时等价于全库检索，与历史行为完全一致。
+      - kb_ids 非空时，仅在指定知识库集合内检索（知识库维度，Phase 6 起主用）；
+      - kb_doc_ids 非空时，按文档维度过滤（旧调用兼容）；
+      - 均为空时等价于全库检索，与历史行为完全一致。
     """
     try:
         top_k = top_k or settings.RETRIEVAL_TOP_K
@@ -82,7 +100,7 @@ async def retrieve_with_scores(
 
         # 1. 缓存查询
         use_cache = use_cache and settings.CACHE_ENABLED
-        key = _cache_key(query, top_k, score_threshold, kb_doc_ids)
+        key = _cache_key(query, top_k, score_threshold, kb_doc_ids, kb_ids)
         if use_cache:
             cached = retrieval_cache.get(key)
             if cached is not None:
@@ -90,11 +108,7 @@ async def retrieve_with_scores(
 
         # 2. 向量路（重排开启时扩大召回量）
         recall_k = settings.RERANK_TOP_N if settings.RERANK_ENABLED else top_k
-        if kb_doc_ids:
-            # kb_doc_ids 优先：仅在指定知识库集合内检索
-            filter_dict = {"kb_doc_id": {"$in": [int(x) for x in kb_doc_ids]}}
-        else:
-            filter_dict = None
+        filter_dict = _build_scope_filter(kb_doc_ids, kb_ids)
         vector_results = await _search_async(query, recall_k, filter_dict)
         # 阈值语义（P4 优化）：召回阶段不过滤——弱相关候选也进入融合池，
         # 由 RRF + 重排决定最终排序；score_threshold 仅由调用方用于"是否有依据"判定
@@ -107,7 +121,7 @@ async def retrieve_with_scores(
                 async with _search_semaphore:
                     bm25_results = await asyncio.to_thread(
                         functools.partial(
-                            _bm25_search_sync, query, settings.BM25_TOP_K, kb_doc_ids
+                            _bm25_search_sync, query, settings.BM25_TOP_K, kb_doc_ids, kb_ids
                         )
                     )
             except Exception as e:
@@ -140,6 +154,7 @@ async def retrieve_similar_chunks(
     top_k: Optional[int] = None,
     score_threshold: Optional[float] = None,
     kb_doc_ids: Optional[List[int]] = None,
+    kb_ids: Optional[List[int]] = None,
 ) -> List[Document]:
     """从向量存储中检索与查询最相似的文档片段（异步，混合检索的薄封装）"""
     results_with_scores = await retrieve_with_scores(
@@ -147,5 +162,6 @@ async def retrieve_similar_chunks(
         top_k=top_k,
         score_threshold=score_threshold,
         kb_doc_ids=kb_doc_ids,
+        kb_ids=kb_ids,
     )
     return [doc for doc, _ in results_with_scores]

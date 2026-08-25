@@ -228,6 +228,14 @@ async def _sync_to_school_articles(db, task, rec: dict, page_url: str):
         # 去重键：优先用记录自带 url（列表页提取出的每条记录 url 是详情页地址，
         # 避免同列表页的多条记录因共用页面地址而互相覆盖）；没有则用当前页地址
         rec_url = _pick_field(rec, "url", "link", "链接", "原文链接") or page_url
+
+        # 只入库"详情页本身抓到"的记录：详情页抓取时 page_url == rec_url（提取自正文全文）；
+        # 列表页提取时 page_url 是列表页地址、rec_url 指向详情页 → 两者不等 → 跳过。
+        # 这样避免只有标题+摘要（无完整正文）的列表页记录污染知识库，
+        # 完整正文的详情页记录仍会正常入库（url_hash 去重合并）。
+        if rec_url != page_url:
+            return
+
         url_hash = sha256_hex(rec_url)
         await db.execute(sa_text("""
             INSERT INTO school_articles (source, title, content, publish_date, url, url_hash)

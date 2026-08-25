@@ -34,3 +34,9 @@ backend/data/
 Thumbs.db
 .DS_Store
 Desktop.ini
+
+# Build / test artifacts
+report.html
+
+# Local dev tooling (agent/skill config, not part of the shipped project)
+.claude/

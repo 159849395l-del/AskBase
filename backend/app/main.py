@@ -19,6 +19,7 @@ from app.api.kb_tables import router as kb_tables_router
 from app.crawler.api.tasks import router as crawler_tasks_router
 from app.crawler.api.results import router as crawler_results_router
 from app.crawler.api.schedule import router as crawler_schedule_router
+from app.api.admin_users import router as admin_users_router
 
 
 @asynccontextmanager
@@ -109,6 +110,7 @@ app.include_router(kb_tables_router)
 app.include_router(crawler_tasks_router)
 app.include_router(crawler_results_router)
 app.include_router(crawler_schedule_router)
+app.include_router(admin_users_router)
 
 
 if __name__ == "__main__":

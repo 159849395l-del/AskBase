@@ -15,6 +15,7 @@ import KnowledgeBaseDetailPage from "./pages/KnowledgeBaseDetailPage";
 import DataSourcePage from "./pages/DataSourcePage";
 import AgentListPage from "./pages/AgentListPage";
 import AgentEditPage from "./pages/AgentEditPage";
+import UserManagePage from "./pages/UserManagePage";
 import ProfilePage from "./pages/ProfilePage";
 import NotFoundPage from "./pages/NotFoundPage";
 
@@ -92,6 +93,14 @@ const App: React.FC = () => {
                 element={
                   <ProtectedRoute requireAdmin>
                     <AgentListPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/admin/users"
+                element={
+                  <ProtectedRoute requireAdmin>
+                    <UserManagePage />
                   </ProtectedRoute>
                 }
               />

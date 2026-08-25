@@ -12,6 +12,7 @@ import {
   MenuUnfoldOutlined,
   BugOutlined,
   ApiOutlined,
+  TeamOutlined,
 } from "@ant-design/icons";
 import { useNavigate, useLocation, Outlet } from "react-router-dom";
 import { useAuthStore } from "../../store/authStore";
@@ -62,6 +63,11 @@ const AppLayout: React.FC = () => {
             key: "/admin/crawler/tasks",
             icon: <BugOutlined />,
             label: "爬虫管理",
+          },
+          {
+            key: "/admin/users",
+            icon: <TeamOutlined />,
+            label: "用户管理",
           },
         ]
       : []),

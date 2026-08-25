@@ -126,7 +126,7 @@ async def execute_extracting(task_id: int):
                     # 详情页记录（rec_url == page_url，完整正文）即使 hash 与列表页记录冲突也落库，
                     # 否则列表页先处理占住 url hash，详情页被 skip 导致完整正文丢失（school_articles 同步也被跳过）
                     exists = await db.scalar(select(func.count()).select_from(CrawlResult).where(CrawlResult.task_id==task_id, CrawlResult.record_hash==rh, CrawlResult.status=="VALID"))
-                    if exists and exists > 0 and rec_url != page.url: skipped+=1; continue
+                    if exists and exists > 0 and not _same_page(rec_url, page.url): skipped+=1; continue
                     r = CrawlResult(task_id=task_id, url=page.url, page_id=page.id, data_json=rec, record_hash=rh, status="VALID", extracted_at=datetime.now())
                     db.add(r); await db.flush(); await db.refresh(r); valid+=1
                     summary = str(rec.get(field_names[0],""))[:60] if field_names else ""
@@ -138,7 +138,7 @@ async def execute_extracting(task_id: int):
                 rh = _record_hash(data, dedup_keys, field_names)
                 rec_url = _pick_field(data, "url", "link", "链接", "原文链接") or page.url
                 exists = await db.scalar(select(func.count()).select_from(CrawlResult).where(CrawlResult.task_id==task_id, CrawlResult.record_hash==rh, CrawlResult.status=="VALID"))
-                if exists and exists > 0 and rec_url != page.url: skipped+=1; continue
+                if exists and exists > 0 and not _same_page(rec_url, page.url): skipped+=1; continue
                 r = CrawlResult(task_id=task_id, url=page.url, page_id=page.id, data_json=data, record_hash=rh, status="VALID", extracted_at=datetime.now())
                 db.add(r); await db.flush(); await db.refresh(r); valid+=1
                 summary = str(data.get(field_names[0],""))[:60] if field_names else ""
@@ -203,6 +203,20 @@ def _record_hash(data, dedup_keys, field_names):
 
 # ---------- school_articles 通用文章落库（任务标题 → 来源名） ----------
 
+def _same_page(url_a: str, url_b: str) -> bool:
+    """判断两个 URL 是否指向同一页面（忽略 http/https、www、尾斜杠差异）
+
+    LLM 提取的 url 可能与页面 url 在协议/主机写法上不同
+    （如 http vs https、带/不带 www），只要 path+query 一致就算同一页。
+    """
+    try:
+        from urllib.parse import urlparse
+        pa, pb = urlparse(url_a), urlparse(url_b)
+        return pa.path.rstrip("/") == pb.path.rstrip("/") and pa.query == pb.query
+    except Exception:
+        return url_a == url_b
+
+
 def _pick_field(rec: dict, *names) -> str:
     """按候选字段名依次取值（兼容中英文字段名）"""
     for n in names:
@@ -241,7 +255,7 @@ async def _sync_to_school_articles(db, task, rec: dict, page_url: str):
         # 列表页提取时 page_url 是列表页地址、rec_url 指向详情页 → 两者不等 → 跳过。
         # 这样避免只有标题+摘要（无完整正文）的列表页记录污染知识库，
         # 完整正文的详情页记录仍会正常入库（url_hash 去重合并）。
-        if rec_url != page_url:
+        if not _same_page(rec_url, page_url):
             return
         # 正文质量门槛：去空白后至少 30 字、去重后至少 20 字，否则视为列表页摘要/垃圾，
         # 防止首页/栏目页提取的"url 恰好等于页面地址"的脏记录入库

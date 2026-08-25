@@ -152,7 +152,7 @@ const AgentListPage: React.FC = () => {
                   </Dropdown>
                 </div>
                 <div style={{ marginTop: 10, color: themeToken.colorTextTertiary, fontSize: 12 }}>
-                  关联知识库 {agent.kb_doc_ids.length} 个
+                  关联知识库 {agent.kb_ids?.length ?? 0} 个
                 </div>
               </Card>
             </Col>

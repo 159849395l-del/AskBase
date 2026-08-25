@@ -280,6 +280,7 @@ const KnowledgeBasePage: React.FC = () => {
           rowKey="id"
           loading={loading}
           size="middle"
+          scroll={{ x: "max-content" }}
           pagination={{ pageSize: 10, showTotal: (t) => `共 ${t} 个知识库` }}
         />
       </Card>

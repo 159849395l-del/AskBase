@@ -342,6 +342,7 @@ const KnowledgeBaseDetailPage: React.FC = () => {
                   rowKey="id"
                   loading={qaLoading}
                   size="middle"
+                  scroll={{ x: "max-content" }}
                   pagination={{
                     current: qaPage,
                     pageSize: 20,
@@ -387,6 +388,7 @@ const KnowledgeBaseDetailPage: React.FC = () => {
                     rowKey="id"
                     loading={docLoading}
                     size="middle"
+                    scroll={{ x: "max-content" }}
                     pagination={{
                       current: docPage,
                       pageSize: 20,

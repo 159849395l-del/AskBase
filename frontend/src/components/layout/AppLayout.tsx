@@ -16,7 +16,6 @@ import {
 import { useNavigate, useLocation, Outlet } from "react-router-dom";
 import { useAuthStore } from "../../store/authStore";
 import { useChatStore } from "../../store/chatStore";
-import ConversationList from "./ConversationList";
 
 const { Header, Sider, Content } = Layout;
 
@@ -27,7 +26,6 @@ const AppLayout: React.FC = () => {
   const logout = useAuthStore((s) => s.logout);
   const isAdmin = useAuthStore((s) => s.isAdmin);
   const user = useAuthStore((s) => s.user);
-  const fetchConversations = useChatStore((s) => s.fetchConversations);
   const resetChat = useChatStore((s) => s.reset);
 
   const { token: themeToken } = theme.useToken();
@@ -35,7 +33,6 @@ const AppLayout: React.FC = () => {
   useEffect(() => {
     // Reset chat store when user changes (different user logged in)
     resetChat();
-    fetchConversations();
   }, [user?.id]);
 
   const menuItems = [
@@ -85,7 +82,7 @@ const AppLayout: React.FC = () => {
         trigger={null}
         collapsible
         collapsed={collapsed}
-        width={300}
+        width={220}
         style={{
           borderRight: `1px solid ${themeToken.colorBorderSecondary}`,
           background: themeToken.colorBgContainer,
@@ -93,13 +90,8 @@ const AppLayout: React.FC = () => {
           flexDirection: "column",
         }}
       >
-        {/* 会话列表（同一智能体复用同一会话，无需新建按钮） */}
+        {/* 菜单导航（会话列表已不在侧边栏展示，聊天入口走 /chat 智能体选择页） */}
         <div style={{ flex: 1, overflow: "auto" }}>
-          <ConversationList collapsed={collapsed} />
-        </div>
-
-        {/* 菜单导航 */}
-        <div style={{ borderTop: `1px solid ${themeToken.colorBorderSecondary}` }}>
           <Menu
             mode="inline"
             selectedKeys={[selectedKey]}
@@ -107,6 +99,10 @@ const AppLayout: React.FC = () => {
             onClick={({ key }) => navigate(key)}
             style={{ borderInlineEnd: "none" }}
           />
+        </div>
+
+        {/* 退出登录 */}
+        <div style={{ borderTop: `1px solid ${themeToken.colorBorderSecondary}` }}>
           <div
             style={{
               padding: "8px 16px",

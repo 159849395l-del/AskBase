@@ -24,6 +24,65 @@ schema: {schema}
 
 SCHEMA_MARKER_KEYS = ("fields", "dedup_keys")
 
+# 任务标题 → 来源名 的常见前后缀（"爬XX大学招生就业" → "XX大学"）
+_SOURCE_PREFIXES = ("爬取", "抓取", "采集", "爬虫", "爬", "抓")
+_SOURCE_SUFFIXES = (
+    "招生就业", "新闻中心", "招聘信息", "官网新闻", "通知公告",
+    "新闻标题", "新闻链接", "招聘", "招生", "新闻", "官网", "公告",
+    "信息", "合集", "动态", "文章",
+)
+
+
+def extract_source_name(task_title: str) -> str:
+    """从任务标题提取来源名（一个任务 = 一个来源）
+
+    '爬西华师范大学招生就业' → '西华师范大学'
+    '抓取西南大学官网新闻'   → '西南大学'
+    '爬四川大学招聘信息合集' → '四川大学'
+    提取失败时返回任务标题去掉前后缀后的剩余文本（兜底），再不行返回空串。
+    """
+    t = (task_title or "").strip()
+    if not t:
+        return ""
+    for p in _SOURCE_PREFIXES:
+        if t.startswith(p):
+            t = t[len(p):]
+            break
+    t = t.lstrip(":：-–— ")
+    for suf in _SOURCE_SUFFIXES:
+        if t.endswith(suf) and len(t) > len(suf):
+            t = t[: -len(suf)]
+            break
+    t = t.strip(":：-–— ")
+    import re
+
+    # 1. 优先匹配机构实体（大学/学院/学校…），非贪婪取最短片段
+    m = re.search(r"[\u4e00-\u9fa5A-Za-z0-9]{2,}?(?:大学|学院|学校|职业技术学院)", t)
+    if m:
+        return m.group(0)[:100]
+    # 2. 其次匹配 网/网站/公司/集团/中心/政府 类实体
+    m = re.search(r"[\u4e00-\u9fa5A-Za-z0-9]{2,}?(?:新闻网|网站|网|公司|集团|中心|政府)", t)
+    if m:
+        return m.group(0)[:100]
+    # 3. 泛化描述（"这条新闻的标题、正文内容"这类无实体词）→ 提取失败返回空
+    if re.search(r"(这条|这个|该|的标题|的正文|的内容|列表)", t):
+        return ""
+    # 4. 系统默认标题（"任务 T260824-19"）→ 返回空，调用方回退 description
+    if "任务" in t or re.match(r"^T\d", t):
+        return ""
+    return t[:100]
+
+
+def extract_source_from_task(task) -> str:
+    """从任务对象提取来源名：优先标题，标题提取不出实体（如系统默认名）时回退描述"""
+    source = extract_source_name(task.title)
+    if source:
+        return source
+    desc = (task.description or "").strip()
+    if desc:
+        return extract_source_name(desc)
+    return ""
+
 
 async def execute_extracting(task_id: int):
     start_ms = int(time.time() * 1000)
@@ -65,6 +124,7 @@ async def execute_extracting(task_id: int):
                     db.add(r); await db.flush(); await db.refresh(r); valid+=1
                     summary = str(rec.get(field_names[0],""))[:60] if field_names else ""
                     await publish_result_new(task_id, r.id, summary)
+                    await _sync_to_school_articles(db, task, rec, page.url)
             else:
                 if not isinstance(data, dict) or not data:
                     invalid+=1; continue
@@ -75,6 +135,7 @@ async def execute_extracting(task_id: int):
                 db.add(r); await db.flush(); await db.refresh(r); valid+=1
                 summary = str(data.get(field_names[0],""))[:60] if field_names else ""
                 await publish_result_new(task_id, r.id, summary)
+                await _sync_to_school_articles(db, task, data, page.url)
         task = await db.get(CrawlTask, task_id)
         if task:
             stats = safe_json(task.stats_json) or {}
@@ -130,3 +191,57 @@ def _record_hash(data, dedup_keys, field_names):
     if not parts:
         return sha256_hex(json.dumps(data, sort_keys=True, ensure_ascii=False))
     return sha256_hex("|".join(parts))
+
+
+# ---------- school_articles 通用文章落库（任务标题 → 来源名） ----------
+
+def _pick_field(rec: dict, *names) -> str:
+    """按候选字段名依次取值（兼容中英文字段名）"""
+    for n in names:
+        v = rec.get(n)
+        if v is not None and str(v) != "":
+            return str(v)
+    return ""
+
+
+async def _sync_to_school_articles(db, task, rec: dict, page_url: str):
+    """把单条提取结果同步写入 school_articles（按 url_hash 去重，失败不阻断主流程）
+
+    字段映射（兼容中英文 schema）：
+      title        ← title/标题
+      content      ← content/正文/正文内容
+      publish_date ← publish_date/publishDate/发布时间/日期
+      source       ← 任务标题提取的来源名（如"西华师范大学"）
+    """
+    try:
+        source = extract_source_from_task(task)
+        if not source:
+            return
+        title = _pick_field(rec, "title", "标题")[:500]
+        content = _pick_field(rec, "content", "正文", "正文内容") or ""
+        publish_date = _pick_field(rec, "publish_date", "publishDate", "发布时间", "日期")[:30]
+        if not title:
+            return
+        from sqlalchemy import text as sa_text
+
+        url_hash = sha256_hex(page_url)
+        await db.execute(sa_text("""
+            INSERT INTO school_articles (source, title, content, publish_date, url, url_hash)
+            VALUES (:source, :title, :content, :publish_date, :url, :url_hash)
+            ON DUPLICATE KEY UPDATE
+              source = VALUES(source),
+              title = VALUES(title),
+              content = VALUES(content),
+              publish_date = VALUES(publish_date)
+        """), {
+            "source": source,
+            "title": title,
+            "content": content,
+            "publish_date": publish_date,
+            "url": page_url,
+            "url_hash": url_hash,
+        })
+        await db.flush()
+        print(f"[Extractor] 已同步 school_articles: source={source} title={title[:30]}")
+    except Exception as e:
+        print(f"[Extractor] 同步 school_articles 失败(忽略): {e}")

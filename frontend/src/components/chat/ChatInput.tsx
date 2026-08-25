@@ -14,7 +14,7 @@ interface KBOption {
 interface ChatInputProps {
   /** 可选知识库列表（用于按 kb_doc_id 限定检索范围，空数组则不显示选择器） */
   knowledgeBases?: KBOption[];
-  onSend: (content: string, kbDocIds?: number[]) => void;
+  onSend: (content: string, kbIds?: number[]) => void;
   onStop?: () => void;
   isStreaming: boolean;
   disabled?: boolean;
@@ -22,7 +22,7 @@ interface ChatInputProps {
 
 const ChatInput: React.FC<ChatInputProps> = ({ knowledgeBases = [], onSend, onStop, isStreaming, disabled }) => {
   const [value, setValue] = useState("");
-  const [kbDocIds, setKbDocIds] = useState<number[] | undefined>(undefined);
+  const [kbIds, setKbIds] = useState<number[] | undefined>(undefined);
   const inputRef = useRef<any>(null);
   const { token: themeToken } = theme.useToken();
 
@@ -35,7 +35,7 @@ const ChatInput: React.FC<ChatInputProps> = ({ knowledgeBases = [], onSend, onSt
   const handleSend = () => {
     const trimmed = value.trim();
     if (!trimmed || isStreaming) return;
-    onSend(trimmed, kbDocIds);
+    onSend(trimmed, kbIds);
     setValue("");
   };
 
@@ -68,8 +68,8 @@ const ChatInput: React.FC<ChatInputProps> = ({ knowledgeBases = [], onSend, onSt
             mode="multiple"
             allowClear
             placeholder="全部知识库"
-            value={kbDocIds}
-            onChange={(val) => setKbDocIds(val as number[])}
+            value={kbIds}
+            onChange={(val) => setKbIds(val as number[])}
             options={knowledgeBases.map((kb) => ({ value: kb.id, label: kb.name }))}
             disabled={disabled}
             style={{ minWidth: 170, flexShrink: 0 }}

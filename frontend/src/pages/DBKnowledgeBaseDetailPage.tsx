@@ -373,6 +373,7 @@ const DBKnowledgeBaseDetailPage: React.FC<Props> = ({ kb, onChanged }) => {
                   rowKey="id"
                   loading={tableLoading}
                   size="middle"
+                  scroll={{ x: "max-content" }}
                   pagination={false}
                   expandable={{
                     expandedRowRender: (record) => (
@@ -381,6 +382,7 @@ const DBKnowledgeBaseDetailPage: React.FC<Props> = ({ kb, onChanged }) => {
                         dataSource={record.fields}
                         rowKey="id"
                         size="small"
+                        scroll={{ x: "max-content" }}
                         pagination={false}
                         title={() => (
                           <Space size={8}>
@@ -419,6 +421,7 @@ const DBKnowledgeBaseDetailPage: React.FC<Props> = ({ kb, onChanged }) => {
                   rowKey="id"
                   loading={kpLoading}
                   size="middle"
+                  scroll={{ x: "max-content" }}
                   pagination={{
                     current: kpPage,
                     pageSize: 20,
@@ -466,6 +469,7 @@ const DBKnowledgeBaseDetailPage: React.FC<Props> = ({ kb, onChanged }) => {
           dataSource={editingTable?.fields || []}
           rowKey="id"
           size="small"
+          scroll={{ x: "max-content" }}
           pagination={false}
           title={() => <Text strong>字段信息（{editingTable?.fields.length || 0}）</Text>}
         />

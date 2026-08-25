@@ -1,8 +1,8 @@
-/** 会话列表组件：每条只显示标题一行，默认 6 条，更多收进「查看更多」 */
+/** 会话列表组件：每条只显示标题一行，作为侧边栏导航入口（删除入口已移除） */
 
 import React, { useState } from "react";
-import { List, Typography, Button, Popconfirm, theme } from "antd";
-import { DeleteOutlined, MessageOutlined, DownOutlined, UpOutlined } from "@ant-design/icons";
+import { List, Typography, Button, theme } from "antd";
+import { MessageOutlined, DownOutlined, UpOutlined } from "@ant-design/icons";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useChatStore } from "../../store/chatStore";
 
@@ -20,7 +20,6 @@ const ConversationList: React.FC<ConversationListProps> = ({ collapsed }) => {
   const conversations = useChatStore((s) => s.conversations);
   const activeId = useChatStore((s) => s.activeConversationId);
   const setActiveConversation = useChatStore((s) => s.setActiveConversation);
-  const removeConversation = useChatStore((s) => s.removeConversation);
   const loadingConversations = useChatStore((s) => s.loadingConversations);
   const { token: themeToken } = theme.useToken();
 
@@ -54,26 +53,6 @@ const ConversationList: React.FC<ConversationListProps> = ({ collapsed }) => {
                 borderInlineEnd: isActive ? `3px solid ${themeToken.colorPrimary}` : "3px solid transparent",
                 transition: "background 0.2s",
               }}
-              extra={
-                !collapsed && (
-                  <Popconfirm
-                    title="确定删除此会话？"
-                    onConfirm={(e) => {
-                      e?.stopPropagation();
-                      removeConversation(item.id);
-                    }}
-                    onCancel={(e) => e?.stopPropagation()}
-                  >
-                    <Button
-                      type="text"
-                      size="small"
-                      danger
-                      icon={<DeleteOutlined />}
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  </Popconfirm>
-                )
-              }
             >
               <List.Item.Meta
                 avatar={<MessageOutlined style={{ fontSize: 16, color: themeToken.colorPrimary }} />}

@@ -44,7 +44,7 @@ const LoginPage: React.FC = () => {
       >
         <div style={{ textAlign: "center", marginBottom: 24 }}>
           <Title level={3} style={{ marginBottom: 4 }}>
-            电商 RAG 知识库问答系统
+            知识库问答系统
           </Title>
           <Text type="secondary">请登录以继续</Text>
         </div>

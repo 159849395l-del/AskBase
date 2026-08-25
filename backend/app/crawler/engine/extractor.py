@@ -101,7 +101,9 @@ async def execute_extracting(task_id: int):
         extracted = set((await db.execute(select(CrawlResult.page_id).where(CrawlResult.task_id == task_id, CrawlResult.status=="VALID"))).scalars().all())
         valid=0; invalid=0; skipped=0; tokens=0
         cleaner = HtmlCleaner()
+        print(f"[Extractor] Task {task_id}: 待处理页面 {len(pages)} 个, 已提取 page_id={sorted(extracted)}")
         for page in pages:
+            print(f"[Extractor] 处理 page={page.id} clean_text={len(page.clean_text or '')} url={page.url[:70]}")
             if page.id in extracted: continue
             if not page.clean_text or not page.clean_text.strip(): invalid+=1; continue
             try:
@@ -111,15 +113,20 @@ async def execute_extracting(task_id: int):
                 print(f"[Extractor] task={task_id} page={page.id} LLM 抽取失败: {e}")
                 invalid+=1; continue
             if data is None or data.get("__empty__"):
+                print(f"[Extractor] page={page.id} 返回 __empty__（无内容）")
                 invalid+=1; continue
             records = data.get("records")
+            print(f"[Extractor] page={page.id} 提取结果: {json.dumps(data, ensure_ascii=False)[:150]}")
             if records and isinstance(records, list):
                 for rec in records:
                     if not isinstance(rec, dict):
                         continue
                     rh = _record_hash(rec, dedup_keys, field_names)
+                    rec_url = _pick_field(rec, "url", "link", "链接", "原文链接") or page.url
+                    # 详情页记录（rec_url == page_url，完整正文）即使 hash 与列表页记录冲突也落库，
+                    # 否则列表页先处理占住 url hash，详情页被 skip 导致完整正文丢失（school_articles 同步也被跳过）
                     exists = await db.scalar(select(func.count()).select_from(CrawlResult).where(CrawlResult.task_id==task_id, CrawlResult.record_hash==rh, CrawlResult.status=="VALID"))
-                    if exists and exists > 0: skipped+=1; continue
+                    if exists and exists > 0 and rec_url != page.url: skipped+=1; continue
                     r = CrawlResult(task_id=task_id, url=page.url, page_id=page.id, data_json=rec, record_hash=rh, status="VALID", extracted_at=datetime.now())
                     db.add(r); await db.flush(); await db.refresh(r); valid+=1
                     summary = str(rec.get(field_names[0],""))[:60] if field_names else ""
@@ -129,8 +136,9 @@ async def execute_extracting(task_id: int):
                 if not isinstance(data, dict) or not data:
                     invalid+=1; continue
                 rh = _record_hash(data, dedup_keys, field_names)
+                rec_url = _pick_field(data, "url", "link", "链接", "原文链接") or page.url
                 exists = await db.scalar(select(func.count()).select_from(CrawlResult).where(CrawlResult.task_id==task_id, CrawlResult.record_hash==rh, CrawlResult.status=="VALID"))
-                if exists and exists > 0: skipped+=1; continue
+                if exists and exists > 0 and rec_url != page.url: skipped+=1; continue
                 r = CrawlResult(task_id=task_id, url=page.url, page_id=page.id, data_json=data, record_hash=rh, status="VALID", extracted_at=datetime.now())
                 db.add(r); await db.flush(); await db.refresh(r); valid+=1
                 summary = str(data.get(field_names[0],""))[:60] if field_names else ""
@@ -234,6 +242,12 @@ async def _sync_to_school_articles(db, task, rec: dict, page_url: str):
         # 这样避免只有标题+摘要（无完整正文）的列表页记录污染知识库，
         # 完整正文的详情页记录仍会正常入库（url_hash 去重合并）。
         if rec_url != page_url:
+            return
+        # 正文质量门槛：去空白后至少 30 字、去重后至少 20 字，否则视为列表页摘要/垃圾，
+        # 防止首页/栏目页提取的"url 恰好等于页面地址"的脏记录入库
+        compact = "".join(content.split())
+        deduped = "".join(dict.fromkeys(compact))
+        if len(compact) < 30 or len(deduped) < 20:
             return
 
         url_hash = sha256_hex(rec_url)

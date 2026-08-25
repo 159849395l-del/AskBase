@@ -212,6 +212,8 @@ async def run_sql_query(
 4. 除非用户明确要求，不要擅自给时间字段添加过滤条件（如 publish_date）
 5. 结果只取需要的行数（如 LIMIT 20）
 6. 若表结构中无法找到与问题相关的表/字段，返回：NO_RELEVANT_TABLE
+7. 【重要】用户询问文章"具体内容/讲了什么/详情/细节"时，SQL 必须 SELECT 正文字段（content）；
+   仅问"有哪些/几篇/标题列表"时才可省略正文字段（如只 SELECT title, publish_date）
 
 【用户问题】
 {question}

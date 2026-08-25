@@ -219,7 +219,7 @@ async def _sync_to_school_articles(db, task, rec: dict, page_url: str):
             return
         title = _pick_field(rec, "title", "标题")[:500]
         content = _pick_field(rec, "content", "正文", "正文内容") or ""
-        publish_date = _pick_field(rec, "publish_date", "publishDate", "发布时间", "日期")[:30]
+        publish_date = _pick_field(rec, "publish_date", "publish_time", "publishDate", "发布时间", "日期")[:30]
         if not title:
             return
         from sqlalchemy import text as sa_text

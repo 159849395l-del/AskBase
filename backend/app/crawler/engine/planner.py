@@ -22,11 +22,18 @@ PLANNER_SYSTEM_PROMPT = """\u4f60\u662f\u722c\u866b\u4efb\u52a1\u89c4\u5212\u566
 \u89c4\u5219\uff1a
 1. \u5b57\u6bb5 name \u5fc5\u987b\u4f7f\u7528\u82f1\u6587 snake_case\uff0cdescription \u7528\u4e2d\u6587\u8bf4\u660e\u542b\u4e49
 2. \u5b57\u6bb5\u6570 2-15 \u4e2a\uff1b\u53ea\u63d0\u53d6\u7528\u6237\u660e\u786e\u63d0\u5230\u7684\u5b57\u6bb5
-3. \u53ea\u8f93\u51fa JSON\uff0c\u4e0d\u8981\u8f93\u51fa\u5176\u4ed6\u6587\u5b57"""
+3. \u3010\u7edf\u4e00\u547d\u540d\u3011\u6587\u7ae0/\u65b0\u95fb\u7c7b\u4efb\u52a1\uff0c\u5b57\u6bb5\u540d\u5fc5\u987b\u56fa\u5b9a\u7528\uff1a
+   - \u6807\u9898 \u2192 title
+   - \u6b63\u6587\u5185\u5bb9 \u2192 content
+   - \u53d1\u5e03\u65f6\u95f4/\u65e5\u671f \u2192 publish_date\uff08type: date\uff0c\u8f93\u51fa ISO \u65e5\u671f\u5982 2026-07-28\uff09
+   - \u94fe\u63a5 \u2192 url
+   \u7981\u6b62\u4f7f\u7528 publish_time\u3001published_at\u3001\u65e5\u671f\u3001\u53d1\u5e03\u65e5\u671f \u7b49\u5176\u4ed6\u5b57\u6bb5\u540d
+4. \u6587\u7ae0\u7c7b\u4efb\u52a1 dedup_keys \u7528 ["url"]\uff08\u6ca1\u6709 url \u5b57\u6bb5\u65f6\u7528 ["title"]\uff09
+5. \u53ea\u8f93\u51fa JSON\uff0c\u4e0d\u8981\u8f93\u51fa\u5176\u4ed6\u6587\u5b57"""
 
 
 def default_schema() -> dict:
-    return {"fields": [{"name":"title","type":"string","description":"\u6807\u9898","required":True},{"name":"text","type":"string","description":"\u6b63\u6587","required":False},{"name":"url","type":"string","description":"\u6765\u6e90\u94fe\u63a5","required":False}],"dedup_keys":["title"]}
+    return {"fields": [{"name":"title","type":"string","description":"\u6807\u9898","required":True},{"name":"content","type":"string","description":"\u6b63\u6587\u5185\u5bb9","required":False},{"name":"publish_date","type":"date","description":"\u53d1\u5e03\u65f6\u95f4","required":False},{"name":"url","type":"string","description":"\u6765\u6e90\u94fe\u63a5","required":False}],"dedup_keys":["title"]}
 
 
 async def execute_planning(task_id: int):

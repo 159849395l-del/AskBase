@@ -1,5 +1,7 @@
 # 知识库问答系统
 
+> ⚠️ **声明**：本项目为作者**个人练手使用**的示例项目，仅用于学习与技术验证，不保证生产可用性，请勿直接用于正式业务环境。
+
 基于 **LangChain** 框架开发的知识库问答系统，支持**文档型知识库**（RAG 向量检索）与**数据库型知识库**（Text-to-SQL 实时查询）双链路问答，内置智能体（Agent）与网页爬虫采集，多用户多会话、流式对话、引用溯源。
 
 ## 技术栈
@@ -124,3 +126,25 @@ npm run dev
 | `/api/admin/users` | 用户管理（创建/禁用/重置密码/删除） | admin |
 | `/api/crawler/tasks` | 爬虫任务管理 | admin |
 | `/api/health` | 健康检查 | 公开 |
+
+## 安全与部署须知
+
+本项目为练手示例，**默认配置仅适用于本地开发**，存在以下硬编码弱口令，部署到任何可公开访问的环境前务必修改：
+
+- 系统管理员默认账号：`admin` / `123456`（见 `backend/app/config.py`、`backend/app/services/auth_service.py`）
+- 爬虫 MySQL 连接默认密码：`123`（见 `backend/app/crawler/config.py`）
+
+修改方式（推荐用环境变量覆盖，不要直接改源码）：
+
+```env
+# backend/.env
+ADMIN_PASSWORD=改成强密码
+JWT_SECRET=改成随机长字符串
+CRAWLER_DB_PASSWORD=改成你的数据库密码
+```
+
+其他建议：
+
+- **切勿提交 `backend/.env`**：该文件含真实密钥，已被 `.gitignore` 忽略；如误提交到公开仓库，请立即轮换对应密钥，因为公开历史无法彻底抹除。
+- 建议在 GitHub 仓库 **Settings → Security** 开启 **Secret scanning** 与 **Push protection**，防止未来误推密钥。
+- 绑定 MySQL 等知识库数据源时，请使用**只读账号**，降低 Text-to-SQL 执行风险。

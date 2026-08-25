@@ -84,7 +84,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description="基于 LangChain 的电商 RAG 企业级知识库问答系统",
+    description="基于 LangChain 的知识库问答系统（文档 RAG + 数据库 Text-to-SQL）",
     lifespan=lifespan,
 )
 

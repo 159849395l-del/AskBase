@@ -211,6 +211,7 @@ async def _sync_to_school_articles(db, task, rec: dict, page_url: str):
       title        ← title/标题
       content      ← content/正文/正文内容
       publish_date ← publish_date/publishDate/发布时间/日期
+      url          ← 优先 rec 里的 url/link/链接（列表页提取时是详情页地址）；否则用当前页面地址
       source       ← 任务标题提取的来源名（如"西华师范大学"）
     """
     try:
@@ -224,7 +225,10 @@ async def _sync_to_school_articles(db, task, rec: dict, page_url: str):
             return
         from sqlalchemy import text as sa_text
 
-        url_hash = sha256_hex(page_url)
+        # 去重键：优先用记录自带 url（列表页提取出的每条记录 url 是详情页地址，
+        # 避免同列表页的多条记录因共用页面地址而互相覆盖）；没有则用当前页地址
+        rec_url = _pick_field(rec, "url", "link", "链接", "原文链接") or page_url
+        url_hash = sha256_hex(rec_url)
         await db.execute(sa_text("""
             INSERT INTO school_articles (source, title, content, publish_date, url, url_hash)
             VALUES (:source, :title, :content, :publish_date, :url, :url_hash)
@@ -238,7 +242,7 @@ async def _sync_to_school_articles(db, task, rec: dict, page_url: str):
             "title": title,
             "content": content,
             "publish_date": publish_date,
-            "url": page_url,
+            "url": rec_url,
             "url_hash": url_hash,
         })
         await db.flush()

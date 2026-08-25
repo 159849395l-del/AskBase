@@ -299,12 +299,12 @@ const KnowledgeBasePage: React.FC = () => {
             label="知识库名称"
             rules={[{ required: true, message: "请输入知识库名称" }]}
           >
-            <Input placeholder="如 民宗委数据库" maxLength={100} />
+            <Input placeholder="如 高校新闻库" maxLength={100} />
           </Form.Item>
 
           <Space.Compact block style={{ display: "flex", gap: 8 }}>
             <Form.Item name="label" label="标签" style={{ flex: 1 }}>
-              <Input placeholder="可选，如 民宗" maxLength={50} />
+              <Input placeholder="可选，如 新闻" maxLength={50} />
             </Form.Item>
             <Form.Item name="authorized_user_id" label="授权用户" style={{ flex: 1 }}>
               <Select

@@ -38,6 +38,27 @@ async def _load_chat_history(db: AsyncSession, conv_id: int, limit: int = None) 
     ]
 
 
+async def _load_agent_tools(db: AsyncSession, agent_id: int) -> list:
+    """读取智能体挂载且启用的工具（转成 AgentToolRef 列表）"""
+    from app.models.agent import AgentTool
+    from app.schemas.agent import AgentToolRef
+
+    rows = (
+        await db.execute(
+            select(AgentTool).where(AgentTool.agent_id == agent_id, AgentTool.enabled == True)  # noqa: E712
+        )
+    ).scalars().all()
+    return [
+        AgentToolRef(
+            tool_type=r.tool_type,
+            tool_ref_id=r.tool_ref_id,
+            tool_ref=r.tool_ref,
+            enabled=r.enabled,
+        )
+        for r in rows
+    ]
+
+
 async def _auto_generate_title(question: str) -> str:
     title = question.strip().replace("\n", " ")[:30]
     if len(question.strip()) > 30:
@@ -64,6 +85,16 @@ async def send_message(
     # 2. Load chat history (must load BEFORE saving user message so it doesn't include itself)
     chat_history = await _load_chat_history(db, conv_id)
 
+    # 2.1 取最近一条消息 id，用于上下文压缩的缓存键（与历史一并稳定）
+    last_msg_id = (
+        await db.execute(
+            select(Message.id)
+            .where(Message.conversation_id == conv_id)
+            .order_by(desc(Message.created_at))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
     # 3. Save user message + auto-title
     user_msg = Message(conversation_id=conv_id, role="user", content=body.content)
     db.add(user_msg)
@@ -84,15 +115,19 @@ async def send_message(
     # 4. 智能体注入：会话绑定 agent 时，覆盖 system_prompt 与 kb_doc_ids（向后兼容：未绑定 agent 时沿用请求 body）
     kb_ids_saved = body.kb_ids
     system_prompt_saved = None
+    model_id_saved = None
+    tools_saved = []
     if conv.agent_id:
         agent = (await db.execute(select(Agent).where(Agent.id == conv.agent_id))).scalar_one_or_none()
         if agent:
             system_prompt_saved = agent.system_prompt
+            model_id_saved = agent.model_id
             # 从关联表取所有 kb_doc_id（用 agent 的限定；空列表=不限制,全库检索）
             kb_rows = await db.execute(
                 select(AgentKnowledgeBase.kb_id).where(AgentKnowledgeBase.agent_id == agent.id)
             )
             kb_ids_saved = [row[0] for row in kb_rows.all()] or None
+            tools_saved = await _load_agent_tools(db, agent.id)
 
     # 5. SSE generator — uses its own DB session to avoid dependency lifecycle issues
     conv_id_saved = conv_id
@@ -109,6 +144,10 @@ async def send_message(
                 history_saved,
                 kb_ids=kb_ids_saved,
                 system_prompt=system_prompt_saved,
+                conv_id=conv_id_saved,
+                last_msg_id=last_msg_id,
+                model_id=model_id_saved,
+                tools=tools_saved,
             ):
                 if event["type"] == "token":
                     full_response += event["content"]
@@ -121,6 +160,10 @@ async def send_message(
                 elif event["type"] == "no_results":
                     # 知识库无结果：转发给前端（区别于正常回答）
                     yield f"event: no_results\ndata: {json.dumps({'message': event['message']}, ensure_ascii=False)}\n\n"
+
+                elif event["type"] == "tool_call":
+                    # 工具调用过程：前端可展示"正在调用 XX 工具"
+                    yield f"event: tool_call\ndata: {json.dumps({'name': event['name'], 'content': event['content']}, ensure_ascii=False)}\n\n"
 
                 elif event["type"] == "done":
                     # Persist assistant message in a SEPARATE session to guarantee commit

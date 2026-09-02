@@ -1,7 +1,7 @@
 """
 query_scope.py — 验证「智能体/会话绑定知识库」的轻量作用域检索（方案 C-lite）
 
-用法（必须在 LangChainRAG项目/backend 目录下，用 venv 运行）:
+用法（必须在 backend 目录下，用 venv 运行）:
   # 1) 列出当前已登记的 ai_crawl 知识库(task -> kb_doc_id 映射)
   python scripts/query_scope.py --list
 

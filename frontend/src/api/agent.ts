@@ -1,7 +1,12 @@
 /** 智能体 API 调用 */
 
 import apiClient from "./client";
-import type { AgentItem, AgentDetail, AgentPayload } from "../types/agent";
+import type {
+  AgentItem,
+  AgentDetail,
+  AgentPayload,
+  AgentToolRef,
+} from "../types/agent";
 
 export async function listAgents(): Promise<AgentItem[]> {
   const resp = await apiClient.get<AgentItem[]>("/agents");
@@ -43,7 +48,14 @@ export async function getOrCreateAgentConversation(
  * 调用方传入当前草稿的 system_prompt / kb_ids，用于编辑页右侧实时预览。
  */
 export function testAgentStream(
-  payload: { question: string; system_prompt?: string; kb_ids?: number[]; history?: [string, string][] },
+  payload: {
+    question: string;
+    system_prompt?: string;
+    kb_ids?: number[];
+    history?: [string, string][];
+    model_id?: number | null;
+    tools?: AgentToolRef[];
+  },
   onToken: (t: string) => void,
   onDone: () => void,
   onError: (msg: string) => void

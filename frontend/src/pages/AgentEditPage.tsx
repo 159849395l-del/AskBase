@@ -18,9 +18,33 @@ import { SaveOutlined, RollbackOutlined, SendOutlined } from "@ant-design/icons"
 import { useParams, useNavigate } from "react-router-dom";
 import { getAgent, createAgent, updateAgent, testAgentStream } from "../api/agent";
 import { listKnowledgeBases } from "../api/knowledgeBases";
+import { listModels } from "../api/models";
+import { listSkills } from "../api/skills";
+import { listMCPServers, listMCPTools } from "../api/mcpServers";
+import type { LLMModelItem } from "../types/llmModel";
+import type { SkillItem } from "../types/skill";
+import type { MCPServerItem, MCPToolItem } from "../types/mcpServer";
+import type { AgentToolRef } from "../types/agent";
 
 const { TextArea } = Input;
 const { Text } = Typography;
+
+/** 工具选择框的 value 编码：skill:<id> 或 mcp:<server_id>:<tool_name> */
+function encodeTool(t: AgentToolRef): string | null {
+  if (t.tool_type === "skill" && t.tool_ref_id) return `skill:${t.tool_ref_id}`;
+  if (t.tool_type === "mcp_tool" && t.tool_ref) return `mcp:${t.tool_ref}`;
+  return null;
+}
+
+function decodeTool(v: string): AgentToolRef | null {
+  if (v.startsWith("skill:")) {
+    return { tool_type: "skill", tool_ref_id: Number(v.slice(6)), enabled: true };
+  }
+  if (v.startsWith("mcp:")) {
+    return { tool_type: "mcp_tool", tool_ref: v.slice(4), enabled: true };
+  }
+  return null;
+}
 
 interface AgentFormValues {
   name: string;
@@ -32,6 +56,8 @@ interface AgentFormValues {
   is_hidden: boolean;
   sort_order: number;
   kb_ids: number[];
+  model_id?: number | null;
+  tool_keys?: string[];
 }
 
 interface PreviewMsg {
@@ -49,6 +75,12 @@ const AgentEditPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [kbOptions, setKbOptions] = useState<{ label: string; value: number }[]>([]);
   const [iconValue, setIconValue] = useState("🤖");
+  const [modelOptions, setModelOptions] = useState<
+    { label: string; value: number }[]
+  >([]);
+  const [toolOptions, setToolOptions] = useState<
+    { label: string; value: string; }[]
+  >([]);
 
   // 预览聊天状态
   const [previewMsgs, setPreviewMsgs] = useState<PreviewMsg[]>([]);
@@ -69,6 +101,49 @@ const AgentEditPage: React.FC = () => {
       )
       .catch(() => {});
 
+    // 模型选项（只列启用中的）
+    listModels()
+      .then((ms: LLMModelItem[]) =>
+        setModelOptions(
+          ms
+            .filter((m) => m.is_active)
+            .map((m) => ({
+              label: `${m.name}${m.is_default ? "（默认）" : ""}`,
+              value: m.id,
+            }))
+        )
+      )
+      .catch(() => {});
+
+    // 工具选项：内部 Skill + 各 MCP 服务下已发现的工具
+    (async () => {
+      try {
+        const opts: { label: string; value: string }[] = [];
+        const skills: SkillItem[] = await listSkills();
+        skills
+          .filter((s) => s.is_active)
+          .forEach((s) =>
+            opts.push({
+              label: `${s.icon || "🔧"} ${s.title || s.name}`,
+              value: `skill:${s.id}`,
+            })
+          );
+        const servers: MCPServerItem[] = await listMCPServers();
+        for (const sv of servers.filter((s) => s.is_active && s.tool_count > 0)) {
+          const tools: MCPToolItem[] = await listMCPTools(sv.id);
+          tools.forEach((t) =>
+            opts.push({
+              label: `${sv.name} / ${t.name}`,
+              value: `mcp:${sv.id}:${t.name}`,
+            })
+          );
+        }
+        setToolOptions(opts);
+      } catch {
+        /* 工具模块异常不影响智能体编辑 */
+      }
+    })();
+
     if (!isNew) {
       getAgent(Number(id))
         .then((agent) => {
@@ -82,6 +157,10 @@ const AgentEditPage: React.FC = () => {
             is_hidden: agent.is_hidden,
             sort_order: agent.sort_order,
             kb_ids: agent.kb_ids,
+            model_id: agent.model_id ?? undefined,
+            tool_keys: (agent.tools || [])
+              .map(encodeTool)
+              .filter((x): x is string => !!x),
           });
           setIconValue(agent.icon || "🤖");
           setLoading(false);
@@ -100,13 +179,20 @@ const AgentEditPage: React.FC = () => {
   const handleSave = async () => {
     try {
       const values = await form.validateFields();
+      const { tool_keys, ...rest } = values;
+      const payload = {
+        ...rest,
+        tools: (tool_keys || [])
+          .map(decodeTool)
+          .filter((t): t is AgentToolRef => !!t),
+      };
       setSaving(true);
       if (isNew) {
-        const created = await createAgent(values);
+        const created = await createAgent(payload);
         message.success("创建成功");
         navigate(`/admin/agents/${created.id}/edit`, { replace: true });
       } else {
-        await updateAgent(Number(id), values);
+        await updateAgent(Number(id), payload);
         message.success("保存成功");
       }
     } catch (e: any) {
@@ -145,6 +231,10 @@ const AgentEditPage: React.FC = () => {
         system_prompt: draft.system_prompt,
         kb_ids: draft.kb_ids || [],
         history,
+        model_id: draft.model_id ?? null,
+        tools: (draft.tool_keys || [])
+          .map(decodeTool)
+          .filter((t): t is AgentToolRef => !!t),
       },
       (token) => {
         setPreviewMsgs((prev) => {
@@ -217,6 +307,8 @@ const AgentEditPage: React.FC = () => {
             is_hidden: false,
             sort_order: 0,
             kb_ids: [],
+            model_id: undefined,
+            tool_keys: [],
           }}>
             <Form.Item name="name" label="名称" rules={[{ required: true, message: "请输入名称" }]}>
               <Input placeholder="如：招生问答助手" maxLength={100} />
@@ -281,6 +373,31 @@ const AgentEditPage: React.FC = () => {
                 mode="multiple"
                 placeholder="选择知识库（可多选，数据库型最多 1 个）"
                 options={kbOptions}
+                allowClear
+              />
+            </Form.Item>
+
+            <Form.Item
+              name="model_id"
+              label="使用模型"
+              extra="不选则使用大模型库中的默认模型；未配置任何模型时回退 .env 配置"
+            >
+              <Select
+                placeholder="系统默认模型"
+                options={modelOptions}
+                allowClear
+              />
+            </Form.Item>
+
+            <Form.Item
+              name="tool_keys"
+              label="启用工具"
+              extra="勾选后模型可在需要时调用这些工具；模型必须支持工具调用才会生效"
+            >
+              <Select
+                mode="multiple"
+                placeholder="选择内部 Skill / MCP 工具（可多选）"
+                options={toolOptions}
                 allowClear
               />
             </Form.Item>

@@ -1,0 +1,52 @@
+[
+  {
+    "question": "波司登女士轻薄羽绒服的填充物是什么",
+    "agent_config": { "kb_ids": null, "system_prompt": null },
+    "expected_tools": ["retrieval"],
+    "expected_answer_keywords": ["白鹅绒"],
+    "expected_sources": ["波司登羽绒服产品说明"]
+  },
+  {
+    "question": "iPhone 16 Pro Max 屏幕尺寸多大",
+    "agent_config": { "kb_ids": null, "system_prompt": null },
+    "expected_tools": ["retrieval"],
+    "expected_answer_keywords": ["6.9英寸"],
+    "expected_sources": ["iPhone 16 Pro Max 规格"]
+  },
+  {
+    "question": "Sharp Objects 这本书多少钱",
+    "agent_config": { "kb_ids": null, "system_prompt": null },
+    "expected_tools": ["retrieval"],
+    "expected_answer_keywords": ["47.82", "Sharp Objects"],
+    "expected_sources": ["英文书库清单"]
+  },
+  {
+    "question": "西华师范大学今年普通类招生计划多少人",
+    "agent_config": { "kb_ids": null, "system_prompt": null },
+    "expected_tools": ["retrieval"],
+    "expected_answer_keywords": ["8741"],
+    "expected_sources": ["2026本科招生录取简报"]
+  },
+  {
+    "question": "今年省内招生各专业组首轮投档录满了吗",
+    "agent_config": { "kb_ids": null, "system_prompt": null },
+    "expected_tools": ["sql"],
+    "expected_answer_keywords": ["录满"],
+    "expected_sources": []
+  },
+  {
+    "question": "各品类商品的平均价格是多少",
+    "agent_config": { "kb_ids": null, "system_prompt": null },
+    "expected_tools": ["sql", "retrieval"],
+    "expected_answer_keywords": ["平均"],
+    "expected_sources": []
+  },
+  {
+    "question": "这件衣服可以机洗吗",
+    "multi_turn": ["夹克多少钱"],
+    "agent_config": { "kb_ids": null, "system_prompt": null },
+    "expected_tools": ["retrieval"],
+    "expected_answer_keywords": ["干洗"],
+    "expected_sources": ["服装洗护说明"]
+  }
+]

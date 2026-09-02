@@ -7,7 +7,8 @@ export default defineConfig({
     port: 5175, // 与 ai_crawl 前端(5173)错开
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        // 后端端口可用环境变量覆盖（默认 8000），便于临时错开端口调试
+        target: `http://localhost:${process.env.ASKBASE_API_PORT || 8000}`,
         changeOrigin: true,
       },
     },

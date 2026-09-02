@@ -10,7 +10,7 @@
   - app.database.async_session_factory      本项目 SQLite 异步会话
 
 前置:
-  1. 必须在 LangChainRAG项目/backend 目录下运行(加载 .env 与相对 chroma 路径)
+  1. 必须在 backend 目录下运行(加载 .env 与相对 chroma 路径)
   2. 安装 PyMySQL:  pip install pymysql
   3. ai_crawl 的 MySQL 可达(127.0.0.1:3306, root/123, db=ai_crawl)
      密码/用户可用环境变量 AI_CRAWL_DB_PASSWORD / AI_CRAWL_DB_USER 覆盖

@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import select, func
 from app.crawler.models import CrawlTask, CrawlPage, CrawlResult, AgentLog, TaskStatus, get_crawler_session_factory
 from app.crawler.engine.html_cleaner import HtmlCleaner
-from app.crawler.utils import sha256_hex, safe_json
+from app.crawler.utils import sha256_hex, safe_json, canonical_url
 from app.crawler.sse_publisher import publish_agent_log, publish_stage_progress, publish_result_new
 from app.crawler.config import CRAWLER_TEXT_CHUNK_LIMIT
 from app.config import settings
@@ -188,31 +188,49 @@ async def _extract_page(task, page, schema, field_names, cleaner):
     return data, used
 
 
+# 记录中的 URL 类字段：参与去重 hash 前先 canonical_url（http/https、www、参数顺序差异合并）
+_URL_FIELDS = ("url", "link", "链接", "原文链接", "source_url")
+
+
+def _norm_rec_value(key: str, v):
+    """URL 类字段取值做 canonical 归一，其余原样转 str"""
+    s = str(v)
+    if key in _URL_FIELDS and "://" in s:
+        return canonical_url(s)
+    return s
+
+
 def _record_hash(data, dedup_keys, field_names):
-    """对齐旧版：去重键缺失/为空时跳过，避免同内容因字段残缺被当成不同记录"""
+    """对齐旧版：去重键缺失/为空时跳过，避免同内容因字段残缺被当成不同记录。
+
+    URL 类去重键（url/link/链接…）先 canonical_url 归一，避免同文不同写法（http/https、
+    www、参数顺序/跟踪参数）产生不同 hash。
+    """
     keys = dedup_keys if dedup_keys else (field_names[:1] if field_names else ["title"])
     parts = []
     for k in keys:
         v = data.get(k)
         if v is not None and str(v) != "":
-            parts.append(str(v))
+            parts.append(_norm_rec_value(k, v))
     if not parts:
-        return sha256_hex(json.dumps(data, sort_keys=True, ensure_ascii=False))
+        # 兜底：按整条记录哈希，URL 类字段同样归一后参与
+        normed = {
+            k: (canonical_url(str(v)) if k in _URL_FIELDS and "://" in str(v) else v)
+            for k, v in data.items()
+        }
+        return sha256_hex(json.dumps(normed, sort_keys=True, ensure_ascii=False))
     return sha256_hex("|".join(parts))
 
 
 # ---------- school_articles 通用文章落库（任务标题 → 来源名） ----------
 
 def _same_page(url_a: str, url_b: str) -> bool:
-    """判断两个 URL 是否指向同一页面（忽略 http/https、www、尾斜杠差异）
+    """判断两个 URL 是否指向同一页面（http/https、www、跟踪参数、参数顺序差异忽略）
 
-    LLM 提取的 url 可能与页面 url 在协议/主机写法上不同
-    （如 http vs https、带/不带 www），只要 path+query 一致就算同一页。
+    LLM 提取的 url 可能与页面 url 在协议/主机写法上不同，统一走 canonical_url 判同。
     """
     try:
-        from urllib.parse import urlparse
-        pa, pb = urlparse(url_a), urlparse(url_b)
-        return pa.path.rstrip("/") == pb.path.rstrip("/") and pa.query == pb.query
+        return canonical_url(url_a) == canonical_url(url_b)
     except Exception:
         return url_a == url_b
 
@@ -264,7 +282,8 @@ async def _sync_to_school_articles(db, task, rec: dict, page_url: str):
         if len(compact) < 30 or len(deduped) < 20:
             return
 
-        url_hash = sha256_hex(rec_url)
+        # url_hash 用 canonical_url 归一（http/https、www、跟踪参数差异视为同一条）
+        url_hash = sha256_hex(canonical_url(rec_url))
         await db.execute(sa_text("""
             INSERT INTO school_articles (source, title, content, publish_date, url, url_hash)
             VALUES (:source, :title, :content, :publish_date, :url, :url_hash)

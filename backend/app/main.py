@@ -20,6 +20,15 @@ from app.crawler.api.tasks import router as crawler_tasks_router
 from app.crawler.api.results import router as crawler_results_router
 from app.crawler.api.schedule import router as crawler_schedule_router
 from app.api.admin_users import router as admin_users_router
+from app.api.models import router as models_router
+from app.api.skills import router as skills_router
+from app.api.mcp_servers import router as mcp_servers_router
+
+# 新表依赖：确保 ORM 注册表包含 llm_models / skills / mcp_servers / agent_tools
+from app.models.llm_model import LLMModel  # noqa: F401
+from app.models.skill import Skill  # noqa: F401
+from app.models.mcp_server import MCPServer  # noqa: F401
+from app.models.agent import AgentTool  # noqa: F401
 
 
 @asynccontextmanager
@@ -71,13 +80,58 @@ async def lifespan(app: FastAPI):
             if "duplicate column" not in str(e).lower():
                 raise
 
-    # 种子管理员账户
+        # 兼容迁移：agents 表加 model_id 列（绑定大模型，NULL=系统默认）
+        try:
+            await conn.execute(text(
+                "ALTER TABLE agents ADD COLUMN model_id INTEGER REFERENCES llm_models(id) ON DELETE SET NULL"
+            ))
+            print("[Startup] 已给 agents 表添加 model_id 列")
+        except Exception as e:
+            if "duplicate column" not in str(e).lower():
+                raise
+
+    # 种子管理员账户 + 内置 Skill
     async with async_session_factory() as session:
         await seed_admin(session)
+        try:
+            from app.skills.registry import ensure_builtin_skills
+
+            created = await ensure_builtin_skills(session)
+            if created:
+                print(f"[Startup] 已写入 {created} 个内置 Skill")
+        except Exception as e:
+            print(f"[Startup] 警告：内置 Skill 初始化失败：{e}")
+
+        # 把 .env 里的 LLM 配置同步成一条可选模型（幂等；不设为默认，
+        # 未指定模型时仍走 .env 兜底，老行为完全不变）
+        try:
+            from app.services.llm_model_service import sync_env_model
+
+            synced = await sync_env_model(session)
+            if synced:
+                print(f"[Startup] 已同步 .env 模型到模型库：{synced.name}（默认仍由 .env 兜底）")
+        except Exception as e:
+            print(f"[Startup] 警告：.env 模型同步失败：{e}")
+
         await session.commit()
+
+    # 启动爬虫定时调度器（常驻后台循环；服务关闭时随事件循环结束）
+    scheduler_task = None
+    try:
+        import asyncio as _asyncio
+
+        from app.crawler.scheduler import scheduler_loop
+
+        scheduler_task = _asyncio.create_task(scheduler_loop())
+        print("[Startup] 爬虫定时调度器已启动（每 20 秒扫描）")
+    except Exception as e:
+        print(f"[Startup] 警告：爬虫定时调度器启动失败：{e}")
 
     print(f"[Startup] 服务已就绪，LLM 模型: {settings.LLM_MODEL}")
     yield
+    if scheduler_task is not None:
+        scheduler_task.cancel()
+        print("[Shutdown] 爬虫定时调度器已停止")
     print("[Shutdown] 服务关闭")
 
 
@@ -111,6 +165,9 @@ app.include_router(crawler_tasks_router)
 app.include_router(crawler_results_router)
 app.include_router(crawler_schedule_router)
 app.include_router(admin_users_router)
+app.include_router(models_router)
+app.include_router(skills_router)
+app.include_router(mcp_servers_router)
 
 
 if __name__ == "__main__":

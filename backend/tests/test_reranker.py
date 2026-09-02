@@ -8,6 +8,7 @@ from langchain_core.documents import Document
 from app.config import settings
 from app.rag.fusion import RetrievalHit
 from app.rag.reranker import (
+    ApiReranker,
     BM25Reranker,
     NoopReranker,
     create_reranker,
@@ -117,12 +118,12 @@ class TestCreateReranker:
 
         assert isinstance(create_reranker(), BM25Reranker)
 
-    def test_mode_api_占位返回Noop(self):
-        """场景：mode=api 未实现 → 打印日志并降级 Noop"""
+    def test_mode_api_返回ApiReranker(self):
+        """场景：mode=api → ApiReranker（百炼 gte-rerank，key 复用 EMBEDDING_API_KEY）"""
         settings.RERANK_ENABLED = True
         settings.RERANK_MODE = "api"
 
-        assert isinstance(create_reranker(), NoopReranker)
+        assert isinstance(create_reranker(), ApiReranker)
 
     def test_未知模式_返回Noop(self):
         """场景：未知 mode → 降级 Noop"""

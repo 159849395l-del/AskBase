@@ -34,7 +34,7 @@
 
 ### 前置要求
 
-- Python 3.10+
+- Python 3.11（推荐版本，依赖已按 3.11 锁定）
 - Node.js 18+
 - MySQL 8（可选，用于数据库型知识库与爬虫）
 - LLM / Embedding API Key
@@ -57,7 +57,16 @@ EMBEDDING_MODEL=text-embedding-v3
 
 ### 2. 一键启动 (Windows)
 
-双击运行 `start.bat`（自动装依赖并启动前后端）。
+双击运行 `start.bat`，脚本会依次完成：检查 Python/Node → 建 venv 并装依赖 → 装 npm 包 →
+清理上次残留进程 → 初始化数据库（建表 + 建管理员）→ 启动前后端并等端口就绪。
+
+```bat
+start.bat              :: 正常启动
+start.bat --reinstall  :: 强制重装 Python 依赖（改过 requirements.txt 时用）
+stop.bat               :: 停止前后端，释放 8000 / 5175
+```
+
+依赖是否重装由 `backend/venv/deps.md5` 里的 requirements.txt 指纹决定，内容变了会自动重装。
 
 ### 3. 手动启动
 
@@ -66,7 +75,8 @@ EMBEDDING_MODEL=text-embedding-v3
 cd backend
 python -m venv venv
 venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+venv\Scripts\python.exe scripts\init_all.py   # 建表 + 建管理员账号
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -79,7 +89,7 @@ npm run dev
 
 ### 4. 访问系统
 
-- 前端页面：http://localhost:5173
+- 前端页面：http://localhost:5175
 - API 文档：http://localhost:8000/docs
 - 管理员账号：`admin` / `123456`
 
@@ -110,7 +120,10 @@ npm run dev
 │       ├── components/     # 可复用组件
 │       ├── store/          # Zustand 状态
 │       └── api/            # API 客户端
-└── start.bat               # 一键启动脚本
+├── start.bat               # 一键启动（含依赖自检、清残留进程、建库、健康检查）
+├── stop.bat                # 停止前后端（清理逻辑已内联，不再需要 ps1 文件）
+└── backend/scripts/
+    └── init_all.py         # 建表 + 初始化管理员账号（可重复执行）
 ```
 
 ## API 概览

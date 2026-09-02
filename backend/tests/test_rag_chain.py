@@ -17,7 +17,7 @@ class TestFormatDocs:
         """场景：单个文档 → 返回带来源标记的上下文和来源列表"""
         doc = Document(
             page_content="电池续航约14小时",
-            metadata={"filename": "electronics.md", "chunk_index": 3, "product_category": "electronics"},
+            metadata={"filename": "electronics.md", "chunk_index": 3},
         )
         score = 0.92
 
@@ -29,7 +29,6 @@ class TestFormatDocs:
         assert sources[0]["filename"] == "electronics.md"
         assert sources[0]["similarity_score"] == 0.92
         assert sources[0]["chunk_index"] == 3
-        assert sources[0]["product_category"] == "electronics"
 
     def test_多个文档_全部编号和排序(self):
         """场景：多个文档 → 每个都有独立的来源编号"""
@@ -82,16 +81,16 @@ class TestFormatDocs:
         _, sources = format_docs_with_sources([(doc, 0.8)])
 
         assert sources[0]["filename"] == "未知文件"
-        assert sources[0]["product_category"] is None
         assert sources[0]["chunk_index"] == 0
+        assert sources[0]["score_type"] == "vector"
 
 
 class TestSystemPrompt:
-    """系统提示词 — 电商产品助手"""
+    """系统提示词 — 知识库问答助手"""
 
     def test_系统提示词_包含关键规则(self):
         """场景：提示词包含所有关键约束规则"""
-        assert "电商产品知识库助手" in SYSTEM_PROMPT
+        assert "知识库问答助手" in SYSTEM_PROMPT
         assert "参考文档" in SYSTEM_PROMPT
         assert "无法找到相关信息" in SYSTEM_PROMPT
         assert "引用来源" in SYSTEM_PROMPT

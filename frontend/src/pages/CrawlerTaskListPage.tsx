@@ -28,20 +28,30 @@ const CrawlerTaskListPage: React.FC = () => {
   const [searchText, setSearchText] = useState("");
   const { token: themeToken } = theme.useToken();
 
-  const fetchTasks = useCallback(async () => {
-    setLoading(true);
+  const fetchTasks = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const resp = await listTasks(page, 20, statusFilter, searchText || undefined);
       setTasks(resp.items);
       setTotal(resp.total);
     } catch {
-      message.error("获取任务列表失败");
+      // 静默轮询失败不打扰用户；手动操作（silent=false）才报错
+      if (!silent) message.error("获取任务列表失败");
     }
-    setLoading(false);
+    if (!silent) setLoading(false);
   }, [page, statusFilter, searchText]);
 
   useEffect(() => {
     fetchTasks();
+  }, [fetchTasks]);
+
+  // 自动刷新：任务可能由定时调度在后台触发、或运行中状态变化，
+  // 4 秒静默轮询一次；标签页隐藏时暂停，避免无谓请求
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") fetchTasks(true);
+    }, 4000);
+    return () => clearInterval(timer);
   }, [fetchTasks]);
 
   const handleDelete = async (id: number) => {
@@ -190,7 +200,7 @@ const CrawlerTaskListPage: React.FC = () => {
           <Button icon={<SearchOutlined />} onClick={handleSearch}>
             搜索
           </Button>
-          <Button icon={<ReloadOutlined />} onClick={fetchTasks}>
+          <Button icon={<ReloadOutlined />} onClick={() => fetchTasks()}>
             刷新
           </Button>
           <Button

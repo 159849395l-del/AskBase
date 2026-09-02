@@ -11,7 +11,7 @@ class CrawlerDbConfig:
     host: str = "127.0.0.1"
     port: int = 3306
     user: str = "root"
-    password: str = "123"
+    password: str = ""  # 通过 CRAWLER_DB_PASSWORD 提供，勿硬编码
     database: str = "ai_crawl"
 
     @property
@@ -25,7 +25,7 @@ def load_crawler_config() -> CrawlerDbConfig:
         host=os.getenv("CRAWLER_DB_HOST", "127.0.0.1"),
         port=int(os.getenv("CRAWLER_DB_PORT", "3306")),
         user=os.getenv("CRAWLER_DB_USER", "root"),
-        password=os.getenv("CRAWLER_DB_PASSWORD", "123"),
+        password=os.getenv("CRAWLER_DB_PASSWORD", ""),
         database=os.getenv("CRAWLER_DB_NAME", "ai_crawl"),
     )
 

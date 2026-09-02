@@ -13,6 +13,8 @@ import {
   BugOutlined,
   ApiOutlined,
   TeamOutlined,
+  BulbOutlined,
+  ToolOutlined,
 } from "@ant-design/icons";
 import { useNavigate, useLocation, Outlet } from "react-router-dom";
 import { useAuthStore } from "../../store/authStore";
@@ -58,6 +60,16 @@ const AppLayout: React.FC = () => {
             key: "/admin/datasources",
             icon: <ApiOutlined />,
             label: "数据源管理",
+          },
+          {
+            key: "/admin/models",
+            icon: <BulbOutlined />,
+            label: "大模型库",
+          },
+          {
+            key: "/admin/tools",
+            icon: <ToolOutlined />,
+            label: "AI 智能工具",
           },
           {
             key: "/admin/crawler/tasks",

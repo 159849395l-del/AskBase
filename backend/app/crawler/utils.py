@@ -3,7 +3,8 @@
 """
 import hashlib
 import json
-from urllib.parse import urlparse, urljoin, urlunparse
+from datetime import time as dtime, timedelta
+from urllib.parse import urlparse, urljoin, urlunparse, urlencode, parse_qsl
 
 
 STATIC_EXTENSIONS = {
@@ -12,16 +13,74 @@ STATIC_EXTENSIONS = {
     ".mp4", ".mp3", ".avi", ".mov", ".pdf", ".zip", ".tar", ".gz",
 }
 
+# 跟踪/统计类 query 参数：同一内容带不同取值时不应视为不同页面（入队与去重前剔除）。
+# 分页、搜索、ID 等**内容寻址**参数（page/id/keyword/cid/type…）不在其中，避免误合并。
+TRACKING_QUERY_KEYS = {
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id",
+    "spm", "from", "fromid", "from_id", "fromurl", "isappinstalled",
+    "scene", "timestamp", "_t", "_r", "ver", "cache",
+    "share_token", "share_uid", "share_from", "share_platform", "share_id",
+    "wechat_redirect", "hmsr", "hm_pl", "hm_lt", "hm_md", "hm_ci", "hmcu", "hmmt",
+}
+
+
+def _strip_tracking_query(query: str) -> str:
+    """移除 query 中的跟踪参数；返回剩余部分（保留原顺序与编码）"""
+    if not query:
+        return ""
+    keep = []
+    for kv in query.split("&"):
+        if not kv:
+            continue
+        k = kv.split("=", 1)[0].lower().strip()
+        if k in TRACKING_QUERY_KEYS or k.startswith("utm_"):
+            continue
+        keep.append(kv)
+    return "&".join(keep)
+
 
 def normalize(url: str) -> str:
-    """URL 归一化：移除 fragment、统一 scheme 小写、尾部斜杠"""
+    """URL 归一化：移除 fragment、统一 scheme 小写、去掉尾部斜杠与跟踪参数。
+
+    用于 url_queue 入队去重（url_hash 基于本函数结果）——
+    同一篇文章带不同 utm/from/timestamp 等跟踪参数时合并为同一条。
+    """
     if not url.startswith("http://") and not url.startswith("https://"):
         return url
     parsed = urlparse(url)
-    cleaned = parsed._replace(fragment="", scheme=parsed.scheme.lower())
+    cleaned = parsed._replace(fragment="", scheme=parsed.scheme.lower(), query=_strip_tracking_query(parsed.query))
     path = cleaned.path.rstrip("/") or "/"
     cleaned = cleaned._replace(path=path)
     return urlunparse(cleaned)
+
+
+def canonical_url(url: str) -> str:
+    """把 URL 归一到"是否指向同一内容"的判据。
+
+    在 normalize 基础上进一步：主机去 www、去默认端口、小写、http/https 统一为 https、
+    query 键排序（顺序无关）。用于提取结果/知识库落库的去重键，
+    避免同一篇文章因 http vs https、带/不带 www、参数顺序不同被当成多条。
+    """
+    if not url or "://" not in url:
+        return url
+    try:
+        p = urlparse(url)
+        scheme = (p.scheme or "http").lower()
+        host = (p.hostname or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        port = p.port
+        default_port = 443 if scheme == "https" else 80
+        netloc = host
+        if port and port not in (default_port, 80, 443):
+            netloc = f"{host}:{port}"
+        path = p.path.rstrip("/") or "/"
+        q = _strip_tracking_query(p.query)
+        if q:
+            q = urlencode(sorted(parse_qsl(q, keep_blank_values=True)))
+        return urlunparse(("https", netloc, path, "", q, ""))
+    except Exception:
+        return url
 
 
 def is_same_domain(url1: str, url2: str) -> bool:
@@ -87,3 +146,28 @@ def safe_json(value, default=None):
                 return default
         return value
     return value
+
+
+def normalize_run_time(value) -> str:
+    """把 run_time 统一成 'HH:MM:SS' 字符串。
+
+    兼容三种形态：MySQL TIME 列经 aiomysql/pymysql 读出是 timedelta、
+    String 读出是 'HH:MM:SS'、SQLAlchemy Time 类型会转成 datetime.time。
+    （超过 24h 的时刻按一天内取模截断，实际业务不会用到。）
+    """
+    if value is None:
+        return "02:00:00"
+    if isinstance(value, timedelta):
+        total = int(value.total_seconds())
+        hh, mm, ss = total // 3600, (total % 3600) // 60, total % 60
+        return f"{hh % 24:02d}:{mm:02d}:{ss:02d}"
+    if isinstance(value, dtime):
+        return value.strftime("%H:%M:%S")
+    text = str(value).strip()
+    parts = text.split(":")
+    if len(parts) >= 3:
+        try:
+            return f"{int(parts[0]) % 24:02d}:{int(parts[1]):02d}:{int(parts[2]):02d}"
+        except ValueError:
+            pass
+    return text[:8] if text else "02:00:00"

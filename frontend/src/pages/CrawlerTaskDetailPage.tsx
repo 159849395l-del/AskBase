@@ -207,8 +207,10 @@ const CrawlerTaskDetailPage: React.FC = () => {
   const handleSaveSchedule = async (values: any) => {
     try {
       const s = await saveSchedule(id, {
-        intervalDays: values.intervalDays,
-        runTime: values.runTime ? values.runTime.format("HH:mm:ss") : "02:00:00",
+        // 后端 ScheduleRequest 用下划线命名（interval_days/run_time），
+        // 传驼峰会被 Pydantic 当多余字段忽略，间隔天数会静默退回默认值 1
+        interval_days: values.intervalDays,
+        run_time: values.runTime ? values.runTime.format("HH:mm:ss") : "02:00:00",
         enabled: values.enabled ?? true,
       });
       setSchedule(s);

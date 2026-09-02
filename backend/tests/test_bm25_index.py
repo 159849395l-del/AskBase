@@ -7,19 +7,19 @@ from app.rag.bm25_index import BM25Index, invalidate_bm25_index
 
 
 def _build_docs():
-    """构造测试语料（3 篇文档，2 个分类）"""
+    """构造测试语料（3 篇文档，2 个知识库 kb）"""
     return [
         Document(
             page_content="这款手机电池续航很长，支持快充",
-            metadata={"product_category": "electronics", "filename": "phone.md", "chunk_index": 0},
+            metadata={"kb_id": 1, "kb_doc_id": 1, "filename": "phone.md", "chunk_index": 0},
         ),
         Document(
             page_content="这款笔记本电脑重量很轻，适合携带",
-            metadata={"product_category": "electronics", "filename": "laptop.md", "chunk_index": 0},
+            metadata={"kb_id": 1, "kb_doc_id": 2, "filename": "laptop.md", "chunk_index": 0},
         ),
         Document(
             page_content="这件纯棉T恤透气舒适，适合夏天",
-            metadata={"product_category": "clothing", "filename": "tshirt.md", "chunk_index": 0},
+            metadata={"kb_id": 2, "kb_doc_id": 3, "filename": "tshirt.md", "chunk_index": 0},
         ),
     ]
 
@@ -52,26 +52,26 @@ class TestBM25Index:
         assert len(results) == 1
         assert "手机" in results[0][0].page_content
 
-    def test_分类过滤_只返回该分类(self):
-        """场景：按 product_category 过滤 → 仅返回该分类中与查询有词重叠的文档"""
+    def test_按kb过滤_只返回该知识库(self):
+        """场景：限定 kb_ids → 仅返回该知识库中与查询有词重叠的文档"""
         self.index.build_from_documents(_build_docs())
 
         # 注意：jieba 会把"手机电池"合并为单 token，查询须用文档内的真实词
-        results = self.index.search("手机电池", top_k=5, product_category="electronics")
+        results = self.index.search("手机电池", top_k=5, kb_ids=[1])
 
-        # laptop.md 无词重叠（score=0）被门槛过滤，仅 phone.md 命中
+        # kb1 含 phone+laptop；laptop 无词重叠（score=0）被门槛过滤，仅 phone 命中
         assert len(results) == 1
         for doc, _ in results:
-            assert doc.metadata["product_category"] == "electronics"
+            assert doc.metadata["kb_id"] == 1
 
-    def test_分类过滤后不足k_返回全部命中(self):
+    def test_过滤后不足k_返回全部命中(self):
         """场景：过滤后命中不足 top_k → 返回过滤后的全部（不补无关文档）"""
         self.index.build_from_documents(_build_docs())
 
-        results = self.index.search("T恤", top_k=5, product_category="clothing")
+        results = self.index.search("T恤", top_k=5, kb_ids=[2])
 
         assert len(results) == 1
-        assert results[0][0].metadata["product_category"] == "clothing"
+        assert results[0][0].metadata["filename"] == "tshirt.md"
 
     def test_空语料_返回空列表(self):
         """场景：空语料 → 检索返回空"""
@@ -148,7 +148,8 @@ class TestBM25Index:
 
         assert doc.metadata["filename"] == "phone.md"
         assert doc.metadata["chunk_index"] == 0
-        assert doc.metadata["product_category"] == "electronics"
+        assert doc.metadata["kb_id"] == 1
+        assert doc.metadata["kb_doc_id"] == 1
 
 
 class TestInvalidateBM25Index:

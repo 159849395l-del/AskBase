@@ -16,10 +16,21 @@ class AgentBase(BaseModel):
     sort_order: int = Field(default=0, description="排序（升序）")
 
 
+class AgentToolRef(BaseModel):
+    """智能体挂载的工具引用"""
+
+    tool_type: str = Field(..., description="skill | mcp_tool")
+    tool_ref_id: Optional[int] = Field(None, description="内部 Skill 的 id（tool_type=skill 时必填）")
+    tool_ref: Optional[str] = Field(None, description="MCP 工具引用 '<server_id>:<tool_name>'（tool_type=mcp_tool 时必填）")
+    enabled: bool = Field(True)
+
+
 class AgentCreate(AgentBase):
     """创建智能体（管理员）"""
 
     kb_ids: List[int] = Field(default_factory=list, description="关联的知识库 ID 列表（数据库型 KB 最多 1 个）")
+    model_id: Optional[int] = Field(None, description="绑定的大模型 ID（NULL=系统默认）")
+    tools: List[AgentToolRef] = Field(default_factory=list, description="挂载的工具列表")
 
 
 class AgentUpdate(BaseModel):
@@ -34,6 +45,8 @@ class AgentUpdate(BaseModel):
     is_hidden: Optional[bool] = None
     sort_order: Optional[int] = None
     kb_ids: Optional[List[int]] = Field(None, description="若提供则全量替换关联的知识库")
+    model_id: Optional[int] = Field(None, description="绑定的大模型 ID（NULL=系统默认）")
+    tools: Optional[List[AgentToolRef]] = Field(None, description="若提供则全量替换挂载的工具")
 
 
 class AgentItem(BaseModel):
@@ -49,6 +62,8 @@ class AgentItem(BaseModel):
     sort_order: int
     created_at: str
     kb_ids: List[int] = []
+    model_id: Optional[int] = None
+    tools: List[AgentToolRef] = []
 
     class Config:
         from_attributes = True
@@ -60,6 +75,8 @@ class AgentDetail(AgentItem):
     system_prompt: str = ""
     updated_at: str = ""
     kb_ids: List[int] = []
+    model_id: Optional[int] = None
+    tools: List[AgentToolRef] = []
 
 
 class AgentCreateResponse(BaseModel):

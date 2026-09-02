@@ -1,4 +1,4 @@
-/** ChatInput 组件测试 — 品类选择器 */
+/** ChatInput 组件测试 — 知识库选择器与发送行为 */
 
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -28,63 +28,59 @@ afterEach(() => {
   cleanup();
 });
 
-describe("ChatInput — 品类选择器", () => {
-  it("categories 渲染为 Select 下拉选项", async () => {
-    render(
-      <ChatInput categories={["羽绒服", "手机"]} onSend={vi.fn()} isStreaming={false} />
-    );
+const KBS = [
+  { id: 1, name: "商品FAQ" },
+  { id: 2, name: "用户手册" },
+];
 
-    // placeholder 展示
-    expect(screen.getByText("全部品类")).toBeTruthy();
+describe("ChatInput — 知识库选择器", () => {
+  it("knowledgeBases 非空：渲染知识库下拉选项", async () => {
+    render(<ChatInput knowledgeBases={KBS} onSend={vi.fn()} isStreaming={false} />);
 
-    // 打开下拉框后能看到全部品类选项（rc-select 可能渲染多个同名节点，用 findAll）
+    // 打开下拉框后能看到知识库选项
     fireEvent.mouseDown(document.querySelector(".ant-select-selector") as Element);
-    const options = await screen.findAllByText("羽绒服");
+    const options = await screen.findAllByText("商品FAQ");
     expect(options.length).toBeGreaterThan(0);
-    expect(screen.getAllByText("手机").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("用户手册").length).toBeGreaterThan(0);
   });
 
-  it("选择品类后发送：onSend 携带 category", async () => {
+  it("选择知识库后发送：onSend 携带 kbIds", async () => {
     const onSend = vi.fn();
-    render(
-      <ChatInput categories={["羽绒服", "手机"]} onSend={onSend} isStreaming={false} />
-    );
+    render(<ChatInput knowledgeBases={KBS} onSend={onSend} isStreaming={false} />);
 
-    // 选择"羽绒服"（精确点击 .ant-select-item-option 节点，避免命中重复文本节点）
+    // 选择"商品FAQ"（精确点击 .ant-select-item-option 节点，避免命中重复文本节点）
     fireEvent.mouseDown(document.querySelector(".ant-select-selector") as Element);
-    await screen.findAllByText("羽绒服");
+    await screen.findAllByText("商品FAQ");
     const optionEl = Array.from(
       document.querySelectorAll<HTMLElement>(".ant-select-item-option")
-    ).find((el) => el.textContent?.includes("羽绒服"));
+    ).find((el) => el.textContent?.includes("商品FAQ"));
     expect(optionEl).toBeTruthy();
     fireEvent.click(optionEl as HTMLElement);
 
     // 输入内容并发送
     fireEvent.change(screen.getByPlaceholderText(TEXTAREA_PLACEHOLDER), {
-      target: { value: "推荐一款保暖的" },
+      target: { value: "如何申请退款？" },
     });
     fireEvent.click(screen.getByRole("button", { name: /发送/ }));
 
-    expect(onSend).toHaveBeenCalledWith("推荐一款保暖的", "羽绒服", undefined);
+    expect(onSend).toHaveBeenCalledWith("如何申请退款？", [1]);
   });
 
-  it("未选择品类发送：onSend 的 category 为 undefined", () => {
+  it("未选择知识库发送：onSend 的 kbIds 为 undefined", () => {
     const onSend = vi.fn();
-    render(
-      <ChatInput categories={["羽绒服", "手机"]} onSend={onSend} isStreaming={false} />
-    );
+    render(<ChatInput knowledgeBases={KBS} onSend={onSend} isStreaming={false} />);
 
     fireEvent.change(screen.getByPlaceholderText(TEXTAREA_PLACEHOLDER), {
       target: { value: "你好" },
     });
     fireEvent.click(screen.getByRole("button", { name: /发送/ }));
 
-    expect(onSend).toHaveBeenCalledWith("你好", undefined, undefined);
+    expect(onSend).toHaveBeenCalledWith("你好", undefined);
   });
 
-  it("categories 为空：不渲染品类选择器", () => {
-    render(<ChatInput categories={[]} onSend={vi.fn()} isStreaming={false} />);
+  it("knowledgeBases 为空：不渲染知识库选择器", () => {
+    render(<ChatInput knowledgeBases={[]} onSend={vi.fn()} isStreaming={false} />);
 
-    expect(screen.queryByText("全部品类")).toBeNull();
+    expect(screen.queryByText("全部知识库")).toBeNull();
   });
 });

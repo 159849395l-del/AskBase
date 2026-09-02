@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
 from app.crawler.models import CrawlTask, CrawlSchedule, get_crawler_db
+from app.crawler.utils import normalize_run_time
 from app.core.dependencies import get_admin_user
 from app.models.user import User
 
@@ -27,7 +28,8 @@ def _schedule_to_dict(s: CrawlSchedule) -> dict:
         "id": s.id,
         "taskId": s.task_id,
         "intervalDays": s.interval_days,
-        "runTime": str(s.run_time)[:8] if s.run_time else "02:00:00",
+        # MySQL TIME 列读出是 timedelta，需归一化成 HH:MM:SS
+        "runTime": normalize_run_time(s.run_time),
         "enabled": s.enabled,
         "lastRunAt": s.last_run_at.isoformat() if s.last_run_at else None,
         "lastStatus": s.last_status or "NONE",

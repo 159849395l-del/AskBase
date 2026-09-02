@@ -68,7 +68,7 @@ class TestSettings:
     def test_CORS_来源_解析正确(self):
         """场景：CORS_ORIGINS 正确解析为列表"""
         origins = settings.cors_origins_list
-        assert "http://localhost:5173" in origins
+        assert "http://localhost:5175" in origins
         assert len(origins) >= 1
 
     def test_数据库URL_配置正确(self):

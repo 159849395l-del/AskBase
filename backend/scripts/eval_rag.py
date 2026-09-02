@@ -21,6 +21,29 @@ BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BACKEND_DIR)
 
 
+def compute_retrieval_metrics(texts: list, keywords: list) -> dict:
+    """复用的检索层指标：给定召回文档文本列表与期望关键词，返回 all-hit / any-hit / 首名排名。
+
+    被 eval_rag.py 与 eval_agent.py 共用 —— Agent 端到端评估禁止重写该逻辑，统一从此处导入。
+    - all_hit: 所有关键词都出现在召回文本中（严格命中）
+    - any_hit: 至少一个关键词命中
+    - first_rank: 首个命中关键词的文档排名（1-based；未命中记 0）
+    """
+    joined = "\n".join(texts)
+    hit_kws = [k for k in keywords if k in joined]
+    first_rank = 0
+    for i, t in enumerate(texts):
+        if any(k in t for k in keywords):
+            first_rank = i + 1
+            break
+    return {
+        "all_hit": len(hit_kws) == len(keywords) and len(keywords) > 0,
+        "any_hit": len(hit_kws) > 0,
+        "hit_kws": hit_kws,
+        "first_rank": first_rank,
+    }
+
+
 async def evaluate(top_k: int) -> dict:
     from app.rag.retriever import retrieve_with_scores
 
@@ -41,10 +64,11 @@ async def evaluate(top_k: int) -> dict:
             print(f"!! {c['q'][:30]} 检索异常: {e}")
             continue
         texts = [d.page_content for d, _ in hits]
-        joined = "\n".join(texts)
-        hit_kws = [k for k in c["kw"] if k in joined]
-        ok_all = len(hit_kws) == len(c["kw"])
-        ok_any = len(hit_kws) > 0
+        m = compute_retrieval_metrics(texts, c["kw"])
+        hit_kws = m["hit_kws"]
+        ok_all = m["all_hit"]
+        ok_any = m["any_hit"]
+        first_rank = m["first_rank"]
         stats["all"] += int(ok_all)
         stats["any"] += int(ok_any)
         cat = c.get("cat", "其他")
@@ -52,12 +76,6 @@ async def evaluate(top_k: int) -> dict:
         b["total"] += 1
         b["all"] += int(ok_all)
 
-        # 首个命中的排名（1-based；未命中记 0）
-        first_rank = 0
-        for i, t in enumerate(texts):
-            if any(k in t for k in c["kw"]):
-                first_rank = i + 1
-                break
         if first_rank > 0:
             stats["mrr"] += 1.0 / first_rank
             stats["rank1"] += int(first_rank == 1)

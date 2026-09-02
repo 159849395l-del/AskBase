@@ -25,6 +25,10 @@ import CrawlerTaskCreatePage from "./pages/CrawlerTaskCreatePage";
 import CrawlerTaskDetailPage from "./pages/CrawlerTaskDetailPage";
 import CrawlerResultPage from "./pages/CrawlerResultPage";
 
+// 大模型库 / AI 智能工具
+import ModelManagePage from "./pages/ModelManagePage";
+import AIToolsPage from "./pages/AIToolsPage";
+
 // 组件
 import ProtectedRoute from "./components/common/ProtectedRoute";
 import AppLayout from "./components/layout/AppLayout";
@@ -117,6 +121,22 @@ const App: React.FC = () => {
                 element={
                   <ProtectedRoute requireAdmin>
                     <AgentEditPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/admin/models"
+                element={
+                  <ProtectedRoute requireAdmin>
+                    <ModelManagePage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/admin/tools"
+                element={
+                  <ProtectedRoute requireAdmin>
+                    <AIToolsPage />
                   </ProtectedRoute>
                 }
               />

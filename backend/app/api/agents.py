@@ -12,14 +12,74 @@ from typing import List, Optional
 from app.database import get_db
 from app.core.dependencies import get_current_user, get_admin_user
 from app.models.user import User
-from app.models.agent import Agent, AgentKnowledgeBase
+from app.models.agent import Agent, AgentKnowledgeBase, AgentTool
 from app.models.knowledge_document import KnowledgeDocument
-from app.schemas.agent import AgentItem, AgentDetail, AgentCreate, AgentUpdate
+from app.schemas.agent import (
+    AgentItem,
+    AgentDetail,
+    AgentCreate,
+    AgentUpdate,
+    AgentToolRef,
+)
 
 router = APIRouter(prefix="/api/agents", tags=["智能体"])
 
 
-async def _to_item(agent: Agent, kb_ids: List[int]) -> AgentItem:
+async def _load_tools(db: AsyncSession, agent_id: int) -> List[AgentToolRef]:
+    """读取智能体挂载的工具（过滤掉已删除的 skill / mcp 服务引用）"""
+    from app.models.skill import Skill
+    from app.models.mcp_server import MCPServer
+
+    rows = (
+        await db.execute(select(AgentTool).where(AgentTool.agent_id == agent_id))
+    ).scalars().all()
+    if not rows:
+        return []
+
+    skill_ids = {r.tool_ref_id for r in rows if r.tool_type == "skill" and r.tool_ref_id}
+    valid_skill_ids: set = set()
+    if skill_ids:
+        valid_skill_ids = {
+            row[0]
+            for row in (
+                await db.execute(select(Skill.id).where(Skill.id.in_(skill_ids)))
+            ).all()
+        }
+
+    mcp_server_ids: set = set()
+    for r in rows:
+        if r.tool_type == "mcp_tool" and r.tool_ref:
+            try:
+                mcp_server_ids.add(int(r.tool_ref.split(":", 1)[0]))
+            except (ValueError, IndexError):
+                pass
+    valid_mcp_ids: set = set()
+    if mcp_server_ids:
+        valid_mcp_ids = {
+            row[0]
+            for row in (
+                await db.execute(select(MCPServer.id).where(MCPServer.id.in_(mcp_server_ids)))
+            ).all()
+        }
+
+    tools: List[AgentToolRef] = []
+    for r in rows:
+        if r.tool_type == "skill":
+            if r.tool_ref_id in valid_skill_ids:
+                tools.append(AgentToolRef(tool_type="skill", tool_ref_id=r.tool_ref_id, enabled=r.enabled))
+        elif r.tool_type == "mcp_tool" and r.tool_ref:
+            try:
+                sid = int(r.tool_ref.split(":", 1)[0])
+            except (ValueError, IndexError):
+                continue
+            if sid in valid_mcp_ids:
+                tools.append(AgentToolRef(tool_type="mcp_tool", tool_ref=r.tool_ref, enabled=r.enabled))
+    return tools
+
+
+async def _to_item(
+    agent: Agent, kb_ids: List[int], tools: Optional[List[AgentToolRef]] = None
+) -> AgentItem:
     return AgentItem(
         id=agent.id,
         name=agent.name,
@@ -31,12 +91,54 @@ async def _to_item(agent: Agent, kb_ids: List[int]) -> AgentItem:
         sort_order=agent.sort_order,
         created_at=agent.created_at,
         kb_ids=kb_ids,
+        model_id=agent.model_id,
+        tools=tools or [],
     )
 
 
-async def _to_detail(agent: Agent, kb_ids: List[int]) -> AgentDetail:
-    item = await _to_item(agent, kb_ids)
+async def _to_detail(
+    agent: Agent, kb_ids: List[int], tools: Optional[List[AgentToolRef]] = None
+) -> AgentDetail:
+    item = await _to_item(agent, kb_ids, tools)
     return AgentDetail(**item.model_dump(), system_prompt=agent.system_prompt, updated_at=agent.updated_at)
+
+
+def _normalize_tool(t) -> Optional[AgentToolRef]:
+    """兼容 dict 与 AgentToolRef 两种入参（model_dump 会把嵌套模型降级成 dict）"""
+    if t is None:
+        return None
+    if isinstance(t, dict):
+        try:
+            return AgentToolRef(**t)
+        except Exception:
+            return None
+    return t
+
+
+async def _sync_tools(db: AsyncSession, agent_id: int, tools: List[AgentToolRef]) -> None:
+    """全量替换智能体挂载的工具"""
+    old = await db.execute(select(AgentTool).where(AgentTool.agent_id == agent_id))
+    for row in old.scalars().all():
+        await db.delete(row)
+    await db.flush()
+    for raw in tools:
+        t = _normalize_tool(raw)
+        if t is None:
+            continue
+        if t.tool_type == "skill" and not t.tool_ref_id:
+            continue
+        if t.tool_type == "mcp_tool" and not t.tool_ref:
+            continue
+        db.add(
+            AgentTool(
+                agent_id=agent_id,
+                tool_type=t.tool_type,
+                tool_ref_id=t.tool_ref_id,
+                tool_ref=t.tool_ref,
+                enabled=t.enabled,
+            )
+        )
+    await db.flush()
 
 
 @router.get("", response_model=List[AgentItem])
@@ -57,7 +159,8 @@ async def list_agents(
         kb_ids = [row[0] for row in (await db.execute(
             select(AgentKnowledgeBase.kb_id).where(AgentKnowledgeBase.agent_id == a.id)
         )).all()]
-        items.append(await _to_item(a, kb_ids))
+        tools = await _load_tools(db, a.id)
+        items.append(await _to_item(a, kb_ids, tools))
     return items
 
 
@@ -75,7 +178,8 @@ async def get_agent(
     kb_ids = [row[0] for row in (await db.execute(
         select(AgentKnowledgeBase.kb_id).where(AgentKnowledgeBase.agent_id == agent_id)
     )).all()]
-    detail = await _to_detail(agent, kb_ids)
+    tools = await _load_tools(db, agent_id)
+    detail = await _to_detail(agent, kb_ids, tools)
     if current_user.role != "admin":
         detail.system_prompt = ""
     return detail
@@ -142,7 +246,9 @@ async def create_agent(
         welcome_message=_sanitize_html(body.welcome_message),
         system_prompt=body.system_prompt,
         is_active=body.is_active,
+        is_hidden=body.is_hidden,
         sort_order=body.sort_order,
+        model_id=body.model_id,
         created_by=admin_user.id,
     )
     db.add(agent)
@@ -150,7 +256,10 @@ async def create_agent(
     for kid in body.kb_ids:
         db.add(AgentKnowledgeBase(agent_id=agent.id, kb_id=kid))
     await db.flush()
-    return await _to_detail(agent, list(body.kb_ids))
+    if body.tools:
+        await _sync_tools(db, agent.id, body.tools)
+    tools = await _load_tools(db, agent.id)
+    return await _to_detail(agent, list(body.kb_ids), tools)
 
 
 @router.put("/{agent_id}", response_model=AgentDetail)
@@ -168,6 +277,9 @@ async def update_agent(
 
     data = body.model_dump(exclude_unset=True)
     kb_ids_update = data.pop("kb_ids", None)
+    data.pop("tools", None)
+    # 注意：tools 必须取 body 上的原始对象，model_dump 会把它降级成 dict
+    tools_update = body.tools
     # 名称唯一性校验（排除自身）
     if "name" in data:
         data["name"] = _sanitize_html(data["name"])
@@ -192,12 +304,16 @@ async def update_agent(
         for kid in kb_ids_update:
             db.add(AgentKnowledgeBase(agent_id=agent_id, kb_id=kid))
 
+    if tools_update is not None:
+        await _sync_tools(db, agent_id, tools_update)
+
     await db.flush()
     # 取最新 kb_ids
     kb_ids = [row[0] for row in (await db.execute(
         select(AgentKnowledgeBase.kb_id).where(AgentKnowledgeBase.agent_id == agent_id)
     )).all()]
-    return await _to_detail(agent, kb_ids)
+    tools = await _load_tools(db, agent_id)
+    return await _to_detail(agent, kb_ids, tools)
 
 
 @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -270,6 +386,8 @@ class AgentTestRequest(BaseModel):
     system_prompt: Optional[str] = None
     kb_ids: List[int] = Field(default_factory=list)
     history: List[List[str]] = Field(default_factory=list, description='[["human","问题"],["ai","回答"]]')
+    model_id: Optional[int] = Field(None, description="测试用的大模型 ID（NULL=系统默认）")
+    tools: List[AgentToolRef] = Field(default_factory=list, description="测试时挂载的工具")
 
 
 @router.post("/test")
@@ -287,6 +405,8 @@ async def test_agent(
                 history,
                 kb_ids=body.kb_ids or None,
                 system_prompt=body.system_prompt,
+                model_id=body.model_id,
+                tools=body.tools,
             ):
                 if event["type"] == "token":
                     yield f"event: token\ndata: {json.dumps({'token': event['content']}, ensure_ascii=False)}\n\n"

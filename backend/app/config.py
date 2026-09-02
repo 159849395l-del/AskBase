@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "deepseek-chat"
     LLM_TEMPERATURE: float = 0.3
 
+    # === 联网搜索（Exa Answer，可选：填 key 后 web_search 优先走 Exa，失效自动回退百度/Bing） ===
+    EXA_API_KEY: str = ""
+
     # === Embedding（OpenAI 兼容端点，如百炼 / 硅基流动） ===
     EMBEDDING_API_KEY: str = ""
     EMBEDDING_API_BASE: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -46,6 +49,10 @@ class Settings(BaseSettings):
     # 口语化短查询（如"衣服怎么洗"）更易命中，无关查询仍有 BM25 门槛兜底
     RETRIEVAL_SCORE_THRESHOLD: float = 0.3
     CHAT_HISTORY_WINDOW: int = 10
+
+    # === 上下文压缩（滑动窗口 + 超阈值摘要） ===
+    CONTEXT_RECENT_TURNS: int = 4              # 近几轮保持原文高保真
+    CONTEXT_COMPRESS_THRESHOLD_TURNS: int = 4  # 历史轮数超过此值才触发摘要压缩
 
     # === 检索优化（混合检索 / 重排 / 改写 / 缓存） ===
     HYBRID_ENABLED: bool = True        # BM25 + 向量混合检索（RRF 融合）

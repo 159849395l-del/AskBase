@@ -20,6 +20,8 @@ schema: {schema}
 4. 若页面是单条内容（一篇文章/一件商品），直接输出 schema 对象
 5. 若页面内容与主题无关（无任何可提取条目），输出 {{"__empty__": true}}
 6. 若 schema 含 url/link 字段，从"页面链接列表"中按锚文本匹配对应的链接；匹配不到才填 null
+7. 若提供了【页面标题】，仅可用于单条内容页的 title 参考，且要去掉网站名/栏目名后缀（如"-西华师范大学"）；列表页的 title 必须取各条目自身的标题，不要用页面标题
+8. 若提供了【页面发布时间】，直接用它填 publish_date（仅单条内容页；列表页各条目的日期以正文为准），不要凭正文内容推断日期
 只输出 JSON。"""
 
 SCHEMA_MARKER_KEYS = ("fields", "dedup_keys")
@@ -167,15 +169,26 @@ async def _extract_page(task, page, schema, field_names, cleaner):
     """
     text = page.clean_text[:CRAWLER_TEXT_CHUNK_LIMIT] if page.clean_text else ""
     links = ""
+    page_title = ""
+    publish_time = ""
     if page.rendered_html:
         try:
             cleaned = cleaner.clean(page.rendered_html, page.url)
+            # 标题与发布时间在爬取阶段未落库（t_page 无对应列），
+            # 这里从原始 HTML 重新取一次，随正文一起喂给 LLM
+            page_title = (cleaned.title or "").strip()
+            publish_time = (cleaned.publish_time or "").strip()
             for i, link in enumerate(cleaned.links[:50]):
                 links += f"{link.anchor_text} => {link.url}\n"
         except: pass
     client = openai.AsyncOpenAI(api_key=settings.LLM_API_KEY, base_url=settings.LLM_API_BASE)
     system = EXTRACTION_SYSTEM_TEMPLATE.format(schema=json.dumps(schema, ensure_ascii=False))
-    user = f"来源URL: {page.url}\n正文: {text}"
+    user = f"来源URL: {page.url}\n"
+    if page_title:
+        user += f"页面标题: {page_title}\n"
+    if publish_time:
+        user += f"页面发布时间: {publish_time}\n"
+    user += f"正文: {text}"
     if links: user += f"\n页面链接列表（锚文本 => 链接）:\n{links}"
     resp = await client.chat.completions.create(model=settings.LLM_MODEL, messages=[{"role":"system","content":system},{"role":"user","content":user}], temperature=0.1, response_format={"type":"json_object"})
     used = resp.usage.total_tokens if resp.usage else 0

@@ -1,5 +1,6 @@
 """CrawlerAgent — 并发爬取 URL 队列"""
 import asyncio
+import re
 import time
 from datetime import datetime
 from sqlalchemy import select, func
@@ -9,9 +10,50 @@ from app.crawler.engine.fetcher import StaticHttpFetcher, PlaywrightFetcher, Cra
 from app.crawler.engine.html_cleaner import HtmlCleaner
 from app.crawler.engine.rate_limiter import RateLimiter
 from app.crawler.engine.robots_policy import RobotsPolicy
-from app.crawler.utils import normalize, is_same_domain, is_static_asset, url_hash, safe_json
+from app.crawler.utils import normalize, is_same_domain, is_static_asset, url_hash, safe_json, is_wechat_article
 from app.crawler.sse_publisher import publish_agent_log, publish_stage_progress, publish_url_progress
 from app.crawler.config import CRAWLER_CONCURRENCY, CRAWLER_MAX_RETRIES
+
+
+# 微信风控/需登录页的文案特征：这些页面 HTTP 200 且带正文，
+# 不拦截会被当作正常文章入库，把验证提示污染进知识库。
+WECHAT_BLOCK_MARKERS = (
+    "请在微信客户端打开",
+    "环境异常",
+    "完成验证后即可继续访问",
+    "操作频繁",
+    "访问过于频繁",
+)
+
+# 微信验证码页的落地路径：文章长链被拦截时会 302 到这里
+WECHAT_CAPTCHA_PATH = "wappoc_appmsgcaptcha"
+
+# 正文容器。正常微信文章页必含它，被拦截的空壳页没有。
+WECHAT_JS_CONTENT_RE = re.compile(r'id\s*=\s*["\']?js_content')
+
+
+def _is_wechat_block_page(url: str, html: str, final_url: str = "") -> bool:
+    """识别微信风控/验证页。仅对 mp.weixin.qq.com 生效，其他站点恒返回 False。
+
+    三种判据，任一命中即拦截：
+    1. 被 302 到验证码页 wappoc_appmsgcaptcha。这是实际最容易踩的一种：
+       「往期推荐」里的 /s?__biz=..&mid=..&sn=.. 长链会被微信要求过验证码，
+       实测换 UA / 加 Referer / 用微信内置浏览器 UA / 上 Playwright 真实浏览器
+       全部无法绕过，只能由人工在浏览器里完成验证；
+    2. 页面文案含风控提示；
+    3. HTTP 200 但返回 ~17KB 的空壳模板、正文容器 js_content 缺失
+       （正常文章页 3MB+ 且必有 js_content）。
+    """
+    if not is_wechat_article(url):
+        return False
+    if final_url and WECHAT_CAPTCHA_PATH in final_url:
+        return True
+    if not html:
+        return False
+    # 风控文案只看开头，避免长正文里偶然提到这些词被误判。
+    if any(m in html[:5000] for m in WECHAT_BLOCK_MARKERS):
+        return True
+    return not WECHAT_JS_CONTENT_RE.search(html)
 
 
 async def execute_crawling(task_id: int):
@@ -88,7 +130,21 @@ async def _crawl_one(task_id, item, fetcher, playwright, cleaner, rate_limiter, 
 
         router_mode = CrawlerRouter.decide(url, plan_hint, page)
         static_len = 0
-        if not page.ok:
+        blocked = False
+        if page.ok and _is_wechat_block_page(url, page.html or "", page.final_url):
+            # 微信风控/验证码页：判定失败且不做 JS 兜底——Playwright 真实浏览器
+            # 实测同样被拦，兜底只会白起一次浏览器，还可能加重风控
+            blocked = True
+            page = FetchedPage(
+                url=url, final_url=page.final_url, http_status=page.http_status,
+                content_type=page.content_type, charset=page.charset,
+                fetch_time_ms=page.fetch_time_ms,
+                error_message=("微信验证码页，需人工过验证后才能访问"
+                               "（/s?__biz=.. 长链会被要求验证，换 /s/xxxx 短链可绕过）"),
+                ok=False,
+            )
+            crawl_mode = "BLOCKED"
+        elif not page.ok:
             # 静态抓取失败（403 / 超时 / 空壳）也尝试 JS 渲染兜底
             router_mode = "JS_RENDER"
         elif page.html:
@@ -97,7 +153,7 @@ async def _crawl_one(task_id, item, fetcher, playwright, cleaner, rate_limiter, 
             static_len = len(pre.clean_text)
             if static_len < 80:
                 router_mode = "JS_RENDER"
-        if router_mode == "JS_RENDER" and await playwright.is_available():
+        if not blocked and router_mode == "JS_RENDER" and await playwright.is_available():
             rendered = await playwright.fetch(url)
             if rendered.ok and rendered.html:
                 if not page.ok:

@@ -100,6 +100,21 @@ def is_static_asset(url: str) -> bool:
     return "." + ext in STATIC_EXTENSIONS
 
 
+WECHAT_ARTICLE_HOST = "mp.weixin.qq.com"
+
+
+def is_wechat_article(url: str) -> bool:
+    """判断是否为微信公众号页面（mp.weixin.qq.com）
+
+    仅这类页面才启用微信专属解析规则与风控页识别，
+    其余站点一律走原有通用逻辑，避免相互影响。
+    """
+    try:
+        return urlparse(url).netloc.lower() == WECHAT_ARTICLE_HOST
+    except Exception:
+        return False
+
+
 def url_hash(task_id: int, url: str) -> str:
     """生成 URL 唯一哈希（用于去重）"""
     raw = f"{task_id}:{normalize(url)}"

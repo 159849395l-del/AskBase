@@ -40,3 +40,6 @@ report.html
 
 # Local dev tooling (agent/skill config, not part of the shipped project)
 .claude/
+
+# 本地 issue tracker（spec 与工单只留在本机，不推到远端）
+.scratch/

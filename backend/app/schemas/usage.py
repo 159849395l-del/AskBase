@@ -1,5 +1,7 @@
 """用量统计相关 schemas"""
 
+from typing import List, Optional
+
 from pydantic import BaseModel
 
 
@@ -23,10 +25,24 @@ class UsageExcluded(BaseModel):
     estimated_calls: int = 0
 
 
+class UsageAgentRow(BaseModel):
+    """按智能体聚合的一行明细"""
+
+    agent_id: Optional[int] = None
+    agent_name: str
+    requests: int = 0
+    llm_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    last_called_at: Optional[str] = None
+
+
 class UsageOverview(BaseModel):
-    """用量总览：范围 + 合计 + 排除情况"""
+    """用量总览：范围 + 合计 + 排除情况 + 按智能体明细（按总 token 降序）"""
 
     start: str
     end: str
     totals: UsageTotals
     excluded: UsageExcluded
+    agents: List[UsageAgentRow] = []

@@ -16,10 +16,25 @@ export interface UsageExcluded {
   estimated_calls: number;
 }
 
-/** 用量总览：范围 + 合计 + 排除情况 */
+/** 按智能体聚合的一行明细 */
+export interface UsageAgentRow {
+  /** 无归属的调用为 null，在报表里显示为「未绑定智能体」 */
+  agent_id: number | null;
+  /** 名称取该智能体最近一次调用留下的快照 */
+  agent_name: string;
+  requests: number;
+  llm_calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  last_called_at: string | null;
+}
+
+/** 用量总览：范围 + 合计 + 排除情况 + 按智能体明细（按总 token 降序） */
 export interface UsageOverview {
   start: string;
   end: string;
   totals: UsageTotals;
   excluded: UsageExcluded;
+  agents: UsageAgentRow[];
 }

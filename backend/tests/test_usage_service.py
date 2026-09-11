@@ -7,7 +7,38 @@ import asyncio
 
 from langchain_core.messages import AIMessage
 
-from app.services.usage_service import UsageContext, estimate_tokens, record_call
+from app.services.usage_service import (
+    TokenUsage,
+    UsageContext,
+    estimate_tokens,
+    read_usage,
+    record_call,
+)
+
+
+class TestReadUsage:
+    """从模型响应里读真实用量 — 只认真正的用量映射"""
+
+    def test_带用量_原样读出(self):
+        """场景：响应带 usage_metadata → 读出三个数"""
+        msg = AIMessage(
+            content="答",
+            usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        )
+        assert read_usage(msg) == TokenUsage(prompt=10, completion=5, total=15)
+
+    def test_无用量_返回None(self):
+        """场景：响应没有 usage_metadata → None（交给估算兜底）"""
+        assert read_usage(AIMessage(content="答")) is None
+
+    def test_测试替身冒充用量_不被采信(self):
+        """场景：MagicMock 也「有」usage_metadata，且 int() 后恰好是 1
+
+        若不校验类型，会伪造出一条 token=1 的「真实」用量并写进库。
+        """
+        from unittest.mock import MagicMock
+
+        assert read_usage(MagicMock()) is None
 
 
 class TestEstimateTokens:

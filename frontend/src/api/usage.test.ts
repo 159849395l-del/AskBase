@@ -27,6 +27,28 @@ describe("getUsageOverview — 用量总览", () => {
         total_tokens: 140,
       },
       excluded: { estimated_calls: 1 },
+      agents: [
+        {
+          agent_id: 7,
+          agent_name: "客服助手",
+          requests: 2,
+          llm_calls: 4,
+          prompt_tokens: 80,
+          completion_tokens: 30,
+          total_tokens: 110,
+          last_called_at: "2026-09-10T12:00:00",
+        },
+        {
+          agent_id: null,
+          agent_name: "未绑定智能体",
+          requests: 0,
+          llm_calls: 1,
+          prompt_tokens: 20,
+          completion_tokens: 10,
+          total_tokens: 30,
+          last_called_at: "2026-09-11T09:00:00",
+        },
+      ],
     };
     mockedGet.mockResolvedValue({ data: payload });
 
@@ -40,6 +62,9 @@ describe("getUsageOverview — 用量总览", () => {
     expect(result.totals.requests).toBe(2);
     expect(result.totals.llm_calls).toBe(5);
     expect(result.excluded.estimated_calls).toBe(1);
+    // 明细要保序透传：后端已按总 token 降序，前端不再重排
+    expect(result.agents.map((a) => a.agent_name)).toEqual(["客服助手", "未绑定智能体"]);
+    expect(result.agents[1].agent_id).toBeNull();
   });
 
   it("场景：接口返回空区间 → 合计为全零而不是 null", async () => {
@@ -55,6 +80,7 @@ describe("getUsageOverview — 用量总览", () => {
           total_tokens: 0,
         },
         excluded: { estimated_calls: 0 },
+        agents: [],
       },
     });
 

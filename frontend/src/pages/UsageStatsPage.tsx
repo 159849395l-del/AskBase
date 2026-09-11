@@ -11,14 +11,16 @@ import {
   Row,
   Spin,
   Statistic,
+  Table,
   Typography,
   message,
 } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
 import dayjs, { Dayjs } from "dayjs";
+import type { ColumnsType } from "antd/es/table";
 
 import { getUsageOverview } from "../api/usage";
-import type { UsageOverview } from "../types/usage";
+import type { UsageAgentRow, UsageOverview } from "../types/usage";
 
 const { RangePicker } = DatePicker;
 const { Text } = Typography;
@@ -27,6 +29,46 @@ const { Text } = Typography;
 const POLL_INTERVAL_MS = 30000;
 /** 默认统计近 30 天 */
 const DEFAULT_RANGE_DAYS = 30;
+/** 明细表七列在窄屏下横向滚动的最小宽度 */
+const AGENT_TABLE_SCROLL_X = 760;
+
+/** token 数字统一千分位：卡片与表格共用同一种格式化，避免两套规则 */
+const formatTokens = (value: number | string) => Number(value).toLocaleString("zh-CN");
+
+/** 明细表列定义（纯常量，不依赖组件状态） */
+const AGENT_COLUMNS: ColumnsType<UsageAgentRow> = [
+  { title: "智能体", dataIndex: "agent_name", key: "agent_name" },
+  { title: "问答次数", dataIndex: "requests", key: "requests", align: "right" },
+  { title: "模型调用次数", dataIndex: "llm_calls", key: "llm_calls", align: "right" },
+  {
+    title: "输入 Token",
+    dataIndex: "prompt_tokens",
+    key: "prompt_tokens",
+    align: "right",
+    render: formatTokens,
+  },
+  {
+    title: "输出 Token",
+    dataIndex: "completion_tokens",
+    key: "completion_tokens",
+    align: "right",
+    render: formatTokens,
+  },
+  {
+    title: "总 Token",
+    dataIndex: "total_tokens",
+    key: "total_tokens",
+    align: "right",
+    render: formatTokens,
+  },
+  {
+    title: "最近调用",
+    dataIndex: "last_called_at",
+    key: "last_called_at",
+    render: (value: string | null) =>
+      value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—",
+  },
+];
 
 const UsageStatsPage: React.FC = () => {
   const [range, setRange] = useState<[Dayjs, Dayjs]>([
@@ -124,45 +166,57 @@ const UsageStatsPage: React.FC = () => {
               {isEmpty ? (
                 <Empty description="暂无用量数据 — 统计自本次升级后开始记录，历史问答不会回溯计入" />
               ) : (
-              <Row gutter={[16, 16]}>
-                <Col xs={12} md={8}>
-                  <Card size="small">
-                    <Statistic title="问答次数" value={totals?.requests ?? 0} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={8}>
-                  <Card size="small">
-                    <Statistic title="模型调用次数" value={totals?.llm_calls ?? 0} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={8}>
-                  <Card size="small">
-                    <Statistic
-                      title="总 Token"
-                      value={totals?.total_tokens ?? 0}
-                      groupSeparator=","
-                    />
-                  </Card>
-                </Col>
-                <Col xs={12} md={8}>
-                  <Card size="small">
-                    <Statistic
-                      title="输入 Token"
-                      value={totals?.prompt_tokens ?? 0}
-                      groupSeparator=","
-                    />
-                  </Card>
-                </Col>
-                <Col xs={12} md={8}>
-                  <Card size="small">
-                    <Statistic
-                      title="输出 Token"
-                      value={totals?.completion_tokens ?? 0}
-                      groupSeparator=","
-                    />
-                  </Card>
-                </Col>
-              </Row>
+              <>
+                <Row gutter={[16, 16]}>
+                  <Col xs={12} md={8}>
+                    <Card size="small">
+                      <Statistic title="问答次数" value={totals?.requests ?? 0} />
+                    </Card>
+                  </Col>
+                  <Col xs={12} md={8}>
+                    <Card size="small">
+                      <Statistic title="模型调用次数" value={totals?.llm_calls ?? 0} />
+                    </Card>
+                  </Col>
+                  <Col xs={12} md={8}>
+                    <Card size="small">
+                      <Statistic
+                        title="总 Token"
+                        value={totals?.total_tokens ?? 0}
+                        formatter={formatTokens}
+                      />
+                    </Card>
+                  </Col>
+                  <Col xs={12} md={8}>
+                    <Card size="small">
+                      <Statistic
+                        title="输入 Token"
+                        value={totals?.prompt_tokens ?? 0}
+                        formatter={formatTokens}
+                      />
+                    </Card>
+                  </Col>
+                  <Col xs={12} md={8}>
+                    <Card size="small">
+                      <Statistic
+                        title="输出 Token"
+                        value={totals?.completion_tokens ?? 0}
+                        formatter={formatTokens}
+                      />
+                    </Card>
+                  </Col>
+                </Row>
+
+                <Table<UsageAgentRow>
+                  rowKey={(row) => (row.agent_id === null ? "unbound" : String(row.agent_id))}
+                  style={{ marginTop: 16 }}
+                  size="small"
+                  dataSource={overview?.agents ?? []}
+                  pagination={false}
+                  scroll={{ x: AGENT_TABLE_SCROLL_X }}
+                  columns={AGENT_COLUMNS}
+                />
+              </>
               )}
             </>
           )}

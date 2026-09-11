@@ -55,7 +55,9 @@ def messages_text(messages) -> str:
 def read_usage(message) -> Optional[TokenUsage]:
     """读 LangChain 消息对象上的真实用量；端点没给就返回 None"""
     meta = getattr(message, "usage_metadata", None)
-    if not meta:
+    # 必须是真正的用量映射。测试替身（MagicMock 等）也「有」这个属性，
+    # 且 int(MagicMock) 恰好等于 1，会被悄悄伪造成一条看似真实的用量。
+    if not isinstance(meta, dict) or not meta:
         return None
     prompt = int(meta.get("input_tokens") or 0)
     completion = int(meta.get("output_tokens") or 0)

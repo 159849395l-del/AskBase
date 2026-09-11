@@ -10,7 +10,14 @@ from app.rag.retriever import retrieve_with_scores
 from app.rag.query_rewriter import rewrite_query
 from app.rag.context_compressor import compress_history
 from app.services.llm_factory import resolve_llm
-from app.services.usage_service import UsageContext, TokenUsage, read_usage, record_call
+from app.services.usage_service import (
+    UsageContext,
+    TokenUsage,
+    messages_text,
+    metered_call,
+    read_usage,
+    record_call,
+)
 from app.schemas.agent import AgentToolRef
 from typing import AsyncIterator, Optional, Dict, Any, List
 import asyncio
@@ -260,7 +267,7 @@ async def stream_rag_response(
 
     # 查询改写：仅开启且存在历史时执行；检索用改写后问题，回答上下文仍用原问题
     if settings.QUERY_REWRITE_ENABLED and history:
-        effective_question = await rewrite_query(question, history)
+        effective_question = await rewrite_query(question, history, usage_ctx=usage_ctx)
     else:
         effective_question = question
 
@@ -288,7 +295,9 @@ async def stream_rag_response(
 
         async def _run_sql():
             async with async_session_factory() as db:
-                return await run_sql_query(db, db_kb, question, system_prompt or "")
+                return await run_sql_query(
+                    db, db_kb, question, system_prompt or "", usage_ctx=usage_ctx
+                )
 
         _vec_task = _asyncio.create_task(_run_vector())
         sql_result = await _run_sql()
@@ -333,11 +342,12 @@ async def stream_rag_response(
         sources.extend(doc_sources)
         context = "\n\n".join(p for p in context_parts if p)
     llm = await resolve_llm(model_id)
+    model_name = getattr(llm, "model_name", None) or settings.LLM_MODEL
     # 上下文压缩：将较早历史压成摘要，近期原文保持高保真。
     # 任何异常/未达阈值时 compress_history 静默降级，返回 (None, history)，
     # 此时 _build_messages 行为与原始 10 轮滑动窗口完全一致。
     compressed_summary, compressed_history = await compress_history(
-        history, conv_id=conv_id, last_msg_id=last_msg_id
+        history, conv_id=conv_id, last_msg_id=last_msg_id, usage_ctx=usage_ctx
     )
     # 挂载工具时放宽"只用参考文档"的约束，并说明工具使用原则
     tool_note = None
@@ -358,7 +368,8 @@ async def stream_rag_response(
     # ---------- 工具调用（挂载了工具且模型支持时才启用） ----------
     if tool_refs:
         tool_events, tool_messages = await _maybe_run_tools(
-            llm, messages, tool_refs, kb_ids=kb_ids
+            llm, messages, tool_refs, kb_ids=kb_ids,
+            usage_ctx=usage_ctx, model_name=model_name,
         )
         for evt in tool_events:
             yield evt
@@ -367,19 +378,32 @@ async def stream_rag_response(
 
     full_response = ""
     usage: Optional[TokenUsage] = None
-    model_name = getattr(llm, "model_name", None) or settings.LLM_MODEL
     started_ms = int(time.time() * 1000)
     # 仅在拿不到真实用量时才用得上，作为估算兜底的输入
-    prompt_text = "\n".join(str(getattr(m, "content", "")) for m in messages)
+    prompt_text = messages_text(messages)
 
-    async for chunk in _astream_answer(llm, messages, model_id):
-        # 端点点形态不一：用量可能挂在最后一个内容块上（DeepSeek），
-        # 也可能是独立的空内容块（OpenAI / 百炼）。取任何非 null 的用量即可，
-        # 不要只认「choices 为空」那一种。后到的覆盖先到的。
-        usage = read_usage(chunk) or usage
-        if chunk.content:
-            full_response += chunk.content
-            yield {"type": "token", "content": chunk.content}
+    try:
+        async for chunk in _astream_answer(llm, messages, model_id):
+            # 端点点形态不一：用量可能挂在最后一个内容块上（DeepSeek），
+            # 也可能是独立的空内容块（OpenAI / 百炼）。取任何非 null 的用量即可，
+            # 不要只认「choices 为空」那一种。后到的覆盖先到的。
+            usage = read_usage(chunk) or usage
+            if chunk.content:
+                full_response += chunk.content
+                yield {"type": "token", "content": chunk.content}
+    except Exception as e:
+        # 失败的调用也留痕（报表会过滤掉），异常照常上抛给上层
+        await record_call(
+            usage_ctx,
+            call_type=usage_call_type,
+            model_name=model_name,
+            model_id=model_id,
+            input_text=prompt_text,
+            output_text=full_response,
+            duration_ms=int(time.time() * 1000) - started_ms,
+            error=str(e),
+        )
+        raise
 
     # 用量采集：旁路写入。record_call 内部吞掉一切异常，这里再加一道耗时上限，
     # 避免极端情况（如数据库锁等待）把回答的收尾一起拖住。
@@ -406,7 +430,14 @@ async def stream_rag_response(
     yield {"type": "done", "full_response": full_response, "usage": usage}
 
 
-async def _maybe_run_tools(llm, messages: list, tool_refs: list, kb_ids=None):
+async def _maybe_run_tools(
+    llm,
+    messages: list,
+    tool_refs: list,
+    kb_ids=None,
+    usage_ctx: Optional[UsageContext] = None,
+    model_name: str = "",
+):
     """工具多轮调用循环：模型判断是否调用 → 执行 → 结果回填 → 再问，最多 3 轮。
 
     部分模型偶发发出空参数 / 参数不全的 tool_call（如 web_search 缺 query），
@@ -430,7 +461,14 @@ async def _maybe_run_tools(llm, messages: list, tool_refs: list, kb_ids=None):
             # 记录每个工具调用真实的 name+args（给 LLM 看第二轮历史时用）
             call_records: list = []
             for _round in range(max_rounds):
-                ai_msg = await llm_with_tools.ainvoke(messages + tool_messages)
+                # 工具轮的每一次模型调用各自进账（类型 tool）
+                ai_msg = await metered_call(
+                    usage_ctx,
+                    call_type="tool",
+                    model_name=model_name,
+                    input_text=messages_text(messages + tool_messages),
+                    call=lambda: llm_with_tools.ainvoke(messages + tool_messages),
+                )
                 tool_calls = getattr(ai_msg, "tool_calls", None) or []
                 if not tool_calls:
                     break  # 模型不再调用工具（可能已直接给出答案）
@@ -462,6 +500,7 @@ async def _maybe_run_tools(llm, messages: list, tool_refs: list, kb_ids=None):
                         ToolMessage(content=r["content"], tool_call_id=r["tool_call_id"])
                     )
     except Exception as e:
+        # 模型调用本身的失败已由 metered_call 记过账；这里只负责降级
         print(f"[chain] 工具调用失败，降级为不调用工具：{e}")
         return [], []
 

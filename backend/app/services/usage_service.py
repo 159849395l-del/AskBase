@@ -9,6 +9,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
+import time
 
 from app.database import async_session_factory
 from app.models.llm_usage import LLMUsageLog
@@ -46,6 +47,11 @@ def estimate_tokens(text: str) -> int:
     return max(cjk + (other + 3) // 4, 1)
 
 
+def messages_text(messages) -> str:
+    """把消息列表拼成文本，仅用于端点未返回用量时的估算兜底"""
+    return "\n".join(str(getattr(m, "content", "")) for m in messages)
+
+
 def read_usage(message) -> Optional[TokenUsage]:
     """读 LangChain 消息对象上的真实用量；端点没给就返回 None"""
     meta = getattr(message, "usage_metadata", None)
@@ -57,6 +63,47 @@ def read_usage(message) -> Optional[TokenUsage]:
     if prompt <= 0 and completion <= 0 and total <= 0:
         return None
     return TokenUsage(prompt=prompt, completion=completion, total=total)
+
+
+async def metered_call(
+    ctx: Optional[UsageContext],
+    *,
+    call_type: str,
+    model_name: str,
+    call,
+    input_text: str = "",
+    model_id: Optional[int] = None,
+):
+    """执行一次模型调用并记账：成功记真实用量，失败记 error 行后原样抛出。
+
+    各调用点只需关心「失败了要怎么降级」，不必各自手抄一整套记账参数。
+    返回值就是 call() 的返回值。
+    """
+    started_ms = int(time.time() * 1000)
+    try:
+        response = await call()
+    except Exception as e:
+        await record_call(
+            ctx,
+            call_type=call_type,
+            model_name=model_name,
+            model_id=model_id,
+            duration_ms=int(time.time() * 1000) - started_ms,
+            error=str(e),
+        )
+        raise
+
+    await record_call(
+        ctx,
+        call_type=call_type,
+        model_name=model_name,
+        model_id=model_id,
+        response=response,
+        input_text=input_text,
+        output_text=str(getattr(response, "content", "") or ""),
+        duration_ms=int(time.time() * 1000) - started_ms,
+    )
+    return response
 
 
 async def record_call(

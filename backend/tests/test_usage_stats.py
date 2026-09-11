@@ -77,6 +77,46 @@ class TestOverviewTotals:
         assert result.totals.llm_calls == 2
         assert result.totals.total_tokens == 3
 
+    def test_双计数_问答次数只数主回答(self, usage_db):
+        """场景：范围内含工具轮/改写/Text2SQL → 问答次数只数主回答，模型调用次数数全部"""
+        _insert(
+            usage_db,
+            _row(call_type="chat"),
+            _row(call_type="tool"),
+            _row(call_type="rewrite"),
+            _row(call_type="text2sql"),
+        )
+
+        result = _overview(usage_db, date(2026, 9, 1), date(2026, 9, 15))
+
+        assert result.totals.requests == 1
+        assert result.totals.llm_calls == 4
+
+    def test_估算行只进排除计数_不进任何合计(self, usage_db):
+        """场景：范围内有两条估算调用 → 只体现在 excluded，token 合计不受影响"""
+        _insert(
+            usage_db,
+            _row(),
+            _row(is_estimated=True, prompt_tokens=50, completion_tokens=10, total_tokens=60),
+            _row(is_estimated=True, prompt_tokens=70, completion_tokens=20, total_tokens=90),
+        )
+
+        result = _overview(usage_db, date(2026, 9, 1), date(2026, 9, 15))
+
+        assert result.totals.llm_calls == 1
+        assert result.totals.requests == 1
+        assert result.totals.total_tokens == 120
+        assert result.excluded.estimated_calls == 2
+
+    def test_失败行_既不计入合计也不计入排除计数(self, usage_db):
+        """场景：失败调用单独留痕，但不属于「估算被排除」，也不进任何数字"""
+        _insert(usage_db, _row(), _row(status="error"))
+
+        result = _overview(usage_db, date(2026, 9, 1), date(2026, 9, 15))
+
+        assert result.totals.llm_calls == 1
+        assert result.excluded.estimated_calls == 0
+
     def test_范围内没有数据_返回全零(self, usage_db):
         """场景：空区间 → 各计数为 0，而不是 null"""
         result = _overview(usage_db, date(2026, 1, 1), date(2026, 1, 31))

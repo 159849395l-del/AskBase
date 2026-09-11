@@ -10,7 +10,10 @@
 - 原始消息仍全量存库，此处压缩只影响"喂给模型的内容"，不丢数据
 """
 
+from typing import Optional
+
 from app.config import settings
+from app.services.usage_service import UsageContext, messages_text, metered_call
 
 
 # 固定严格 prompt：要求保留用户核心诉求、关键结论、已确认表名/字段约束、未决问题
@@ -50,12 +53,15 @@ async def compress_history(
     keep_recent: int = None,
     conv_id=None,
     last_msg_id=None,
+    usage_ctx: Optional[UsageContext] = None,
 ):
     """把 messages 分成「最近 keep_recent 轮」与「更早的」。
 
     返回 (summary_text_or_None, recent_raw_messages)：
     - 无更早消息 或 总轮数 <= 阈值 -> (None, messages)  # 不压缩，行为等价于原滑动窗口
     - 否则调 LLM 压成 ≤200 字摘要（带缓存；任何异常静默降级回原窗口）
+
+    副作用：真正调用 LLM 的那一次会记一条用量流水（类型 compress）；缓存命中时不记账。
 
     messages 格式与项目一致：[(role, content), ...]，role ∈ {"human", "ai"}。
     """
@@ -80,12 +86,27 @@ async def compress_history(
     if key in _summary_cache:
         return (_summary_cache[key], recent)
 
+    model_name = settings.LLM_MODEL
     try:
         # 函数内 import，避免与 chain.py 循环导入
         from app.rag.chain import get_llm
 
+        llm = get_llm()
+        model_name = getattr(llm, "model_name", None) or model_name
         msgs = _build_compress_messages(earlier)
-        response = await get_llm().ainvoke(msgs)
+        # 真实调用发生即记账（即使摘要不可用也已消耗 token）；失败留痕由 metered_call 负责
+        response = await metered_call(
+            usage_ctx,
+            call_type="compress",
+            model_name=model_name,
+            input_text=messages_text(msgs),
+            call=lambda: llm.ainvoke(msgs),
+        )
+    except Exception as e:
+        print(f"[ContextCompress] 摘要异常，降级回原滑动窗口: {e}")
+        return (None, messages)
+
+    try:
         summary = (response.content or "").strip()
         if not summary or summary == "无":
             # 视为无有效摘要，不压缩，退回原窗口
@@ -99,5 +120,5 @@ async def compress_history(
 
         return (summary, recent)
     except Exception as e:
-        print(f"[ContextCompress] 摘要异常，降级回原滑动窗口: {e}")
+        print(f"[ContextCompress] 摘要处理异常，降级回原滑动窗口: {e}")
         return (None, messages)

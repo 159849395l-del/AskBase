@@ -20,7 +20,9 @@ from app.models.knowledge_base import KnowledgeBase
 from app.models.data_source import DataSource
 from app.models.db_table import DBTable, DBTableField
 from app.utils.crypto import decrypt_password
+from app.config import settings
 from app.rag.chain import get_llm
+from app.services.usage_service import UsageContext, metered_call
 
 MAX_ROWS = 100
 MAX_FIELD_CHARS = 500
@@ -177,6 +179,7 @@ async def run_sql_query(
     kb: KnowledgeBase,
     question: str,
     system_prompt: str,
+    usage_ctx: Optional[UsageContext] = None,
 ) -> Dict[str, Any]:
     """对 B 类知识库执行一次"生成 SQL → 校验 → 执行"链路
 
@@ -220,9 +223,19 @@ async def run_sql_query(
 
 【SQL】"""
 
+    model_name = settings.LLM_MODEL
     try:
         llm = get_llm()
-        resp = await llm.ainvoke([{"role": "user", "content": sql_prompt}])
+        model_name = getattr(llm, "model_name", None) or model_name
+        # SQL 生成是一次真实调用：记账与失败留痕都由 metered_call 负责，
+        # 无论后面校验/执行结果如何，这一次消耗都已进账
+        resp = await metered_call(
+            usage_ctx,
+            call_type="text2sql",
+            model_name=model_name,
+            input_text=sql_prompt,
+            call=lambda: llm.ainvoke([{"role": "user", "content": sql_prompt}]),
+        )
         raw_sql = str(resp.content or "").strip()
     except Exception as e:
         return {"sql": "", "result_text": f"（SQL 生成失败：{e}）", "success": False, "error": str(e)}

@@ -1,6 +1,6 @@
 /** 用量统计页面 — 仅管理员 */
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Button,
@@ -10,6 +10,7 @@ import {
   Empty,
   Row,
   Segmented,
+  Select,
   Spin,
   Statistic,
   Table,
@@ -21,7 +22,9 @@ import { Column, Line } from "@ant-design/plots";
 import dayjs, { Dayjs } from "dayjs";
 import type { ColumnsType } from "antd/es/table";
 
+import { listAgents } from "../api/agent";
 import { getUsageOverview, getUsageTimeseries } from "../api/usage";
+import type { AgentItem } from "../types/agent";
 import type {
   UsageAgentRow,
   UsageGranularity,
@@ -43,6 +46,8 @@ const CHART_HEIGHT = 260;
  * 这里只用来限制日期选择范围，真正的拒绝仍由后端负责。
  */
 const MAX_BUCKETS = 400;
+/** 作用域下拉里代表「全部智能体」的取值 */
+const ALL_AGENTS = "all";
 
 /** token 数字统一千分位：卡片与表格共用同一种格式化，避免两套规则 */
 const formatTokens = (value: number | string) => Number(value).toLocaleString("zh-CN");
@@ -100,13 +105,24 @@ const UsageStatsPage: React.FC = () => {
   const [customRange, setCustomRange] = useState<[Dayjs, Dayjs] | null>(null);
   /** 实际生效的区间，来自接口返回，因此前后端不会各算一套 */
   const [range, setRange] = useState<[Dayjs, Dayjs] | null>(null);
+  /** 整页作用域："all" 或某个智能体 id */
+  const [scope, setScope] = useState<number | typeof ALL_AGENTS>(ALL_AGENTS);
+  /** 下拉可选项来自智能体列表，与用量明细无关 */
+  const [agents, setAgents] = useState<AgentItem[]>([]);
+  /** 请求序号：只让最新一次请求的结果落到 state，避免过期响应覆盖 */
+  const requestSeq = useRef(0);
   const [overview, setOverview] = useState<UsageOverview | null>(null);
   const [series, setSeries] = useState<UsageTimeseries | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
 
   const load = useCallback(
-    async (custom: [Dayjs, Dayjs] | null, gran: UsageGranularity) => {
+    async (
+      custom: [Dayjs, Dayjs] | null,
+      gran: UsageGranularity,
+      scopeId: number | typeof ALL_AGENTS
+    ) => {
+      const seq = ++requestSeq.current;
       setLoading(true);
       try {
         const explicit = custom
@@ -115,41 +131,60 @@ const UsageStatsPage: React.FC = () => {
               end: custom[1].format("YYYY-MM-DD"),
             }
           : {};
+        const scoped = scopeId === ALL_AGENTS ? {} : { agent_id: scopeId };
         // 汇总与时间序列必须落在同一区间，否则卡片与图表对不上。
         // 缺省区间交给后端按粒度推导，前端不再复刻那套规则。
         const [overviewData, seriesData] = await Promise.all([
-          getUsageOverview({ granularity: gran, ...explicit }),
-          getUsageTimeseries({ granularity: gran, ...explicit }),
+          getUsageOverview({ granularity: gran, ...explicit, ...scoped }),
+          getUsageTimeseries({ granularity: gran, ...explicit, ...scoped }),
         ]);
+        // 期间又发起了更新的请求：这份响应已经过期，直接丢弃，
+        // 否则卡片/表格会与下拉选中的作用域不一致
+        if (seq !== requestSeq.current) return;
         setOverview(overviewData);
         setSeries(seriesData);
         setRange([dayjs(overviewData.start), dayjs(overviewData.end)]);
         setLoadFailed(false);
       } catch (err) {
+        if (seq !== requestSeq.current) return;
         setLoadFailed(true);
         // 把后端的原因如实透出（例如「时间跨度过大…请改用更粗的粒度」）
         message.error(detailOf(err) ?? "用量数据加载失败");
       } finally {
-        setLoading(false);
+        if (seq === requestSeq.current) setLoading(false);
       }
     },
     []
   );
 
-  // 打开即拉取；切换区间或粒度后重新拉取
+  // 下拉选项来自智能体列表而不是用量明细：明细只含「当前区间内有用量」的智能体，
+  // 会让没用量的智能体无从选起；列表也天然不随区间变化
   useEffect(() => {
-    load(customRange, granularity);
-  }, [customRange, granularity, load]);
+    listAgents()
+      .then(setAgents)
+      .catch(() => message.error("智能体列表加载失败"));
+  }, []);
+
+  /** 三个查询条件（区间 / 粒度 / 作用域）在这里合流，调用方不必各自重复 */
+  const refresh = useCallback(
+    () => load(customRange, granularity, scope),
+    [load, customRange, granularity, scope]
+  );
+
+  // 打开即拉取；切换区间、粒度或作用域后重新拉取
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
 
   // 页面可见时定时刷新；切到后台标签页不发请求，避免空转
   useEffect(() => {
     const timer = setInterval(() => {
       if (document.visibilityState === "visible") {
-        load(customRange, granularity);
+        refresh();
       }
     }, POLL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [customRange, granularity, load]);
+  }, [refresh]);
 
   const handleGranularityChange = (value: string | number) => {
     setGranularity(value as UsageGranularity);
@@ -188,7 +223,7 @@ const UsageStatsPage: React.FC = () => {
         extra={
           <Button
             icon={<ReloadOutlined />}
-            onClick={() => load(customRange, granularity)}
+            onClick={refresh}
             loading={loading}
           >
             刷新
@@ -196,6 +231,18 @@ const UsageStatsPage: React.FC = () => {
         }
       >
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+          <Select
+            value={scope}
+            onChange={setScope}
+            style={{ width: 200 }}
+            options={[
+              { label: "全部智能体", value: ALL_AGENTS },
+              ...agents.map((agent) => ({
+                label: agent.name,
+                value: agent.id,
+              })),
+            ]}
+          />
           <Segmented
             options={GRANULARITY_OPTIONS}
             value={granularity}

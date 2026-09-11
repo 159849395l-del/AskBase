@@ -60,6 +60,60 @@ def _insert(factory, *rows):
     asyncio.run(_run())
 
 
+class TestAgentScope:
+    """按智能体作用域：整页只统计选中的那一个"""
+
+    def test_总览限定到某个智能体(self, usage_db):
+        """场景：两个智能体都有用量 → 限定后合计只算选中的那个"""
+        _insert(
+            usage_db,
+            _row(agent_id=1, agent_name="便宜助手", total_tokens=100,
+                 prompt_tokens=80, completion_tokens=20),
+            _row(agent_id=2, agent_name="昂贵助手", total_tokens=300,
+                 prompt_tokens=200, completion_tokens=100),
+        )
+
+        result = _overview(usage_db, date(2026, 9, 1), date(2026, 9, 15), agent_id=2)
+
+        assert result.totals.total_tokens == 300
+        assert result.totals.prompt_tokens == 200
+        assert result.totals.llm_calls == 1
+        assert result.totals.requests == 1
+        # 明细也随之只剩这一行
+        assert [r.agent_id for r in result.agents] == [2]
+        assert [r.agent_name for r in result.agents] == ["昂贵助手"]
+
+    def test_总览限定后_与不限定时的该行一致(self, usage_db):
+        """场景：限定后的合计应当等于未限定时该智能体那一行的数字"""
+        _insert(
+            usage_db,
+            _row(agent_id=1, agent_name="A", total_tokens=100,
+                 prompt_tokens=80, completion_tokens=20),
+            _row(agent_id=1, agent_name="A", call_type="tool", total_tokens=40,
+                 prompt_tokens=30, completion_tokens=10),
+            _row(agent_id=2, agent_name="B", total_tokens=300,
+                 prompt_tokens=200, completion_tokens=100),
+        )
+
+        all_result = _overview(usage_db, date(2026, 9, 1), date(2026, 9, 15))
+        scoped = _overview(usage_db, date(2026, 9, 1), date(2026, 9, 15), agent_id=1)
+        row = [r for r in all_result.agents if r.agent_id == 1][0]
+
+        assert scoped.totals.total_tokens == row.total_tokens
+        assert scoped.totals.llm_calls == row.llm_calls
+        assert scoped.totals.requests == row.requests
+
+    def test_限定到无数据的智能体_返回全零(self, usage_db):
+        """场景：选中的智能体在该区间没有用量 → 全零，而不是报错"""
+        _insert(usage_db, _row(agent_id=1, agent_name="A"))
+
+        result = _overview(usage_db, date(2026, 9, 1), date(2026, 9, 15), agent_id=99)
+
+        assert result.totals.llm_calls == 0
+        assert result.totals.total_tokens == 0
+        assert result.agents == []
+
+
 class TestPerAgentBreakdown:
     """按智能体聚合：排序、名称快照、无归属分组"""
 
@@ -161,10 +215,10 @@ class TestPerAgentBreakdown:
         assert result.agents[0].last_called_at == "2026-09-05T18:30:00"
 
 
-def _overview(factory, start, end):
+def _overview(factory, start, end, agent_id=None):
     async def _run():
         async with factory() as db:
-            return await overview(db, start, end)
+            return await overview(db, start, end, agent_id=agent_id)
 
     return asyncio.run(_run())
 

@@ -10,6 +10,8 @@ export interface UsageQueryParams {
   start?: string;
   /** 结束日期（含），格式 YYYY-MM-DD；不传则为今天 */
   end?: string;
+  /** 限定到某个智能体；不传为全部（整页作用域下钻） */
+  agent_id?: number;
 }
 
 /** 汇总范围内的真实用量 + 按智能体明细（仅管理员可访问） */

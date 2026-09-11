@@ -19,10 +19,10 @@ from app.services.usage_stats_service import (
 from tests.test_usage_stats import _insert, _row
 
 
-def _series(factory, start, end, granularity):
+def _series(factory, start, end, granularity, agent_id=None):
     async def _run():
         async with factory() as db:
-            return await timeseries(db, start, end, granularity)
+            return await timeseries(db, start, end, granularity, agent_id=agent_id)
 
     return asyncio.run(_run())
 
@@ -100,6 +100,84 @@ class TestTimeseriesEndpoint:
         assert exc.value.status_code == 400
         assert "时间跨度过大" in exc.value.detail
         assert "粒度" in exc.value.detail
+
+
+class TestEndpointsForwardScope:
+    """端点把 agent_id 如实转发给统计服务（作用域下钻的唯一后端改动点）"""
+
+    def _stub_service(self, monkeypatch, name):
+        captured = {}
+
+        async def fake(db, start, end, granularity=None, agent_id=None):
+            captured["agent_id"] = agent_id
+            captured["granularity"] = granularity
+            return None
+
+        monkeypatch.setattr(f"app.services.usage_stats_service.{name}", fake)
+        return captured
+
+    def test_总览把agent_id转发下去(self, monkeypatch):
+        """场景：带 agent_id 调总览 → 服务收到同一个值"""
+        from app.api.usage import get_overview
+
+        captured = self._stub_service(monkeypatch, "overview")
+
+        async def _call():
+            await get_overview(
+                granularity="day",
+                start=date(2026, 9, 1),
+                end=date(2026, 9, 2),
+                agent_id=7,
+                admin_user=None,
+                db=None,
+            )
+
+        asyncio.run(_call())
+        assert captured["agent_id"] == 7
+
+    def test_总览agent_id为None时原样转发(self, monkeypatch):
+        """场景：agent_id=None（即「全部」）→ 服务同样收到 None
+
+        注意：这里必须显式传 None。直接调用端点函数时，未传的参数拿到的是
+        FastAPI 的 Query 默认对象而不是 None（框架在请求处理阶段才解析）；
+        「完全不传该参数」这条路径由真实 HTTP 端到端验证覆盖。
+        """
+        from app.api.usage import get_overview
+
+        captured = self._stub_service(monkeypatch, "overview")
+
+        async def _call():
+            await get_overview(
+                granularity="day",
+                start=date(2026, 9, 1),
+                end=date(2026, 9, 2),
+                agent_id=None,
+                admin_user=None,
+                db=None,
+            )
+
+        asyncio.run(_call())
+        assert captured["agent_id"] is None
+
+    def test_时间序列把agent_id转发下去(self, monkeypatch):
+        """场景：带 agent_id 调时间序列 → 服务收到同一个值与粒度"""
+        from app.api.usage import get_timeseries
+
+        captured = self._stub_service(monkeypatch, "timeseries")
+
+        async def _call():
+            await get_timeseries(
+                granularity="month",
+                start=date(2026, 9, 1),
+                end=date(2026, 9, 2),
+                agent_id=42,
+                admin_user=None,
+                db=None,
+            )
+
+        asyncio.run(_call())
+        assert captured["agent_id"] == 42
+        assert captured["granularity"] == "month"
 
 
 class TestResolveRange:
@@ -219,6 +297,39 @@ class TestTimeseriesPoints:
 
         assert result.points[0].prompt_tokens == 110
         assert result.points[0].completion_tokens == 30
+
+    def test_按智能体作用域_只算选中的那个(self, usage_db):
+        """场景：同一天两个智能体都有用量 → 限定后只算选中的"""
+        _insert(
+            usage_db,
+            _row(agent_id=1, created_at="2026-09-11T10:00:00", total_tokens=100,
+                 prompt_tokens=80, completion_tokens=20),
+            _row(agent_id=2, created_at="2026-09-11T11:00:00", total_tokens=300,
+                 prompt_tokens=200, completion_tokens=100),
+        )
+
+        result = _series(usage_db, date(2026, 9, 11), date(2026, 9, 11), "day", agent_id=2)
+
+        assert result.points[0].total_tokens == 300
+        assert result.points[0].llm_calls == 1
+        assert result.points[0].prompt_tokens == 200
+
+    def test_作用域下_空桶仍然补零(self, usage_db):
+        """场景：限定到某智能体后，它没有数据的日子仍是连续的 0"""
+        _insert(
+            usage_db,
+            _row(agent_id=1, created_at="2026-09-11T10:00:00", total_tokens=100,
+                 prompt_tokens=80, completion_tokens=20),
+            _row(agent_id=2, created_at="2026-09-12T10:00:00", total_tokens=300,
+                 prompt_tokens=200, completion_tokens=100),
+        )
+
+        result = _series(usage_db, date(2026, 9, 10), date(2026, 9, 13), "day", agent_id=2)
+
+        assert [p.bucket for p in result.points] == [
+            "2026-09-10", "2026-09-11", "2026-09-12", "2026-09-13",
+        ]
+        assert [p.total_tokens for p in result.points] == [0, 0, 300, 0]
 
     def test_空区间_全部补零(self, usage_db):
         """场景：范围内一条数据都没有 → 返回补齐的零序列，而不是空数组"""

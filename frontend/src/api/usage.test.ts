@@ -82,6 +82,16 @@ describe("getUsageOverview — 用量总览", () => {
     });
   });
 
+  it("场景：限定到某个智能体 → 请求带上 agent_id", async () => {
+    mockedGet.mockResolvedValue({ data: OVERVIEW_PAYLOAD });
+
+    await getUsageOverview({ granularity: "day", agent_id: 7 });
+
+    expect(mockedGet).toHaveBeenCalledWith("/admin/usage/overview", {
+      params: { granularity: "day", agent_id: 7 },
+    });
+  });
+
   it("场景：接口返回空区间 → 合计为全零而不是 null", async () => {
     mockedGet.mockResolvedValue({
       data: {
@@ -148,6 +158,28 @@ describe("getUsageTimeseries — 用量时间序列", () => {
     // 补零的桶必须原样保留，前端据此画出连续曲线
     expect(result.points.map((p) => p.bucket)).toEqual(["2026-08", "2026-09"]);
     expect(result.points[1].total_tokens).toBe(0);
+  });
+
+  it("场景：限定到某个智能体 → 时间序列请求同样带上 agent_id", async () => {
+    mockedGet.mockResolvedValue({
+      data: { granularity: "day", start: "2026-09-01", end: "2026-09-30", points: [] },
+    });
+
+    await getUsageTimeseries({
+      granularity: "day",
+      start: "2026-09-01",
+      end: "2026-09-30",
+      agent_id: 7,
+    });
+
+    expect(mockedGet).toHaveBeenCalledWith("/admin/usage/timeseries", {
+      params: {
+        granularity: "day",
+        start: "2026-09-01",
+        end: "2026-09-30",
+        agent_id: 7,
+      },
+    });
   });
 
   it("场景：只给粒度 → 缺省区间同样由后端推导", async () => {

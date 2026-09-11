@@ -49,12 +49,15 @@ async def get_overview(
     granularity: Granularity = Query("day", description="缺省区间按该粒度推导"),
     start: Optional[date] = Query(None, description="起始日期（含），缺省按粒度推导"),
     end: Optional[date] = Query(None, description="结束日期（含），缺省为今天"),
+    agent_id: Optional[int] = Query(None, description="限定到某个智能体；不传为全部"),
     admin_user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     """汇总时间范围内的真实用量（估算行与失败行不计入）"""
     resolved_start, resolved_end = _resolve(start, end, granularity)
-    return await usage_stats_service.overview(db, resolved_start, resolved_end)
+    return await usage_stats_service.overview(
+        db, resolved_start, resolved_end, agent_id=agent_id
+    )
 
 
 @router.get("/timeseries", response_model=UsageTimeseries)
@@ -62,6 +65,7 @@ async def get_timeseries(
     granularity: Granularity = Query("day", description="时间粒度"),
     start: Optional[date] = Query(None, description="起始日期（含），缺省按粒度推导"),
     end: Optional[date] = Query(None, description="结束日期（含），缺省为今天"),
+    agent_id: Optional[int] = Query(None, description="限定到某个智能体；不传为全部"),
     admin_user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -69,7 +73,7 @@ async def get_timeseries(
     resolved_start, resolved_end = _resolve(start, end, granularity)
     try:
         return await usage_stats_service.timeseries(
-            db, resolved_start, resolved_end, granularity
+            db, resolved_start, resolved_end, granularity, agent_id=agent_id
         )
     except ValueError as e:
         # 跨度超出桶数上限：明确拒绝，不硬算

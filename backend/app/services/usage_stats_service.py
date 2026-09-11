@@ -63,18 +63,30 @@ def _range_filter(lo: str, hi: str) -> list:
     ]
 
 
-def _real_usage_filter(lo: str, hi: str) -> list:
-    """报表的统一过滤条件：成功 + 非估算 + 落在范围内"""
+def _agent_filter(agent_id: Optional[int]) -> list:
+    """按智能体限定作用域；不传表示「全部」"""
+    if agent_id is None:
+        return []
+    return [LLMUsageLog.agent_id == agent_id]
+
+
+def _excluded_filter(lo: str, hi: str, agent_id: Optional[int] = None) -> list:
+    """被排除出统计的估算行：不参与合计，只用于提示数据完整性"""
+    return [
+        LLMUsageLog.is_estimated == True,  # noqa: E712
+        *_range_filter(lo, hi),
+        *_agent_filter(agent_id),
+    ]
+
+
+def _real_usage_filter(lo: str, hi: str, agent_id: Optional[int] = None) -> list:
+    """报表的统一过滤条件：成功 + 非估算 + 落在范围内 +（可选）限定智能体"""
     return [
         LLMUsageLog.status == "success",
         LLMUsageLog.is_estimated == False,  # noqa: E712
         *_range_filter(lo, hi),
+        *_agent_filter(agent_id),
     ]
-
-
-def bucket_of(iso_time: str, granularity: str) -> str:
-    """把一条记录的本地时间截成它所属的时间桶"""
-    return iso_time[: _KEY_LEN[granularity]]
 
 
 def _ensure_granularity(granularity: str) -> None:
@@ -133,9 +145,13 @@ async def timeseries(
     db: AsyncSession,
     start: date,
     end: date,
-    granularity: str,
+    granularity: Granularity,
+    agent_id: Optional[int] = None,
 ) -> UsageTimeseries:
-    """按粒度返回时间序列；没有数据的时间桶补 0，保证曲线连续"""
+    """按粒度返回时间序列；没有数据的时间桶补 0，保证曲线连续
+
+    agent_id 给定时只统计该智能体，页面据此做整页下钻。
+    """
     buckets = iter_buckets(start, end, granularity)  # 顺带校验粒度与跨度上限
     lo, hi = _range_bounds(start, end)
     bucket_col = func.substr(LLMUsageLog.created_at, 1, _KEY_LEN[granularity])
@@ -150,7 +166,7 @@ async def timeseries(
                 _sum_of(LLMUsageLog.completion_tokens).label("completion_tokens"),
                 _sum_of(LLMUsageLog.total_tokens).label("total_tokens"),
             )
-            .where(*_real_usage_filter(lo, hi))
+            .where(*_real_usage_filter(lo, hi, agent_id))
             .group_by(bucket_col)
         )
     ).all()
@@ -178,10 +194,18 @@ async def timeseries(
     )
 
 
-async def overview(db: AsyncSession, start: date, end: date) -> UsageOverview:
-    """汇总时间范围内的真实用量（估算行与失败行不计入）"""
+async def overview(
+    db: AsyncSession,
+    start: date,
+    end: date,
+    agent_id: Optional[int] = None,
+) -> UsageOverview:
+    """汇总时间范围内的真实用量（估算行与失败行不计入）
+
+    agent_id 给定时整页只统计该智能体：合计、排除计数与明细一并收窄。
+    """
     lo, hi = _range_bounds(start, end)
-    real = _real_usage_filter(lo, hi)
+    real = _real_usage_filter(lo, hi, agent_id)
 
     row = (
         await db.execute(
@@ -200,10 +224,7 @@ async def overview(db: AsyncSession, start: date, end: date) -> UsageOverview:
     # 否则端点哪天不再返回用量时，报表会静默变成 0 而看不出原因。
     estimated = (
         await db.execute(
-            select(func.count()).where(
-                LLMUsageLog.is_estimated == True,  # noqa: E712
-                *_range_filter(lo, hi),
-            )
+            select(func.count()).where(*_excluded_filter(lo, hi, agent_id))
         )
     ).scalar_one()
 
@@ -218,7 +239,7 @@ async def overview(db: AsyncSession, start: date, end: date) -> UsageOverview:
             total_tokens=int(row.total_tokens or 0),
         ),
         excluded=UsageExcluded(estimated_calls=int(estimated or 0)),
-        agents=await _per_agent(db, lo, hi),
+        agents=await _per_agent(db, lo, hi, agent_id),
     )
 
 
@@ -229,7 +250,9 @@ def _display_name(agent_id, agent_name) -> str:
     return agent_name or f"智能体 #{agent_id}"
 
 
-async def _latest_names(db: AsyncSession, lo: str, hi: str) -> dict:
+async def _latest_names(
+    db: AsyncSession, lo: str, hi: str, agent_id: Optional[int] = None
+) -> dict:
     """每个智能体在区间内**最近一条带名称的**快照
 
     取快照而不是回查 agents 表：改名后历史仍归到同一行并显示新名，
@@ -249,7 +272,10 @@ async def _latest_names(db: AsyncSession, lo: str, hi: str) -> dict:
             )
             .label("rn"),
         )
-        .where(*_real_usage_filter(lo, hi), LLMUsageLog.agent_name.is_not(None))
+        .where(
+            *_real_usage_filter(lo, hi, agent_id),
+            LLMUsageLog.agent_name.is_not(None),
+        )
         .subquery()
     )
     rows = await db.execute(
@@ -258,8 +284,10 @@ async def _latest_names(db: AsyncSession, lo: str, hi: str) -> dict:
     return {agent_id: name for agent_id, name in rows.all()}
 
 
-async def _per_agent(db: AsyncSession, lo: str, hi: str) -> list:
-    """按智能体聚合，按总 token 降序"""
+async def _per_agent(
+    db: AsyncSession, lo: str, hi: str, agent_id: Optional[int] = None
+) -> list:
+    """按智能体聚合，按总 token 降序；限定作用域时只剩选中的那一行"""
     total_tokens = _sum_of(LLMUsageLog.total_tokens)
 
     rows = (
@@ -273,7 +301,7 @@ async def _per_agent(db: AsyncSession, lo: str, hi: str) -> list:
                 total_tokens.label("total_tokens"),
                 func.max(LLMUsageLog.created_at).label("last_called_at"),
             )
-            .where(*_real_usage_filter(lo, hi))
+            .where(*_real_usage_filter(lo, hi, agent_id))
             .group_by(LLMUsageLog.agent_id)
             # 用量相同时把「未绑定智能体」排在真实智能体之后
             # （SQLite 升序会把 NULL 排在最前，所以要显式把它压到最后）
@@ -285,7 +313,7 @@ async def _per_agent(db: AsyncSession, lo: str, hi: str) -> list:
         )
     ).all()
 
-    names = await _latest_names(db, lo, hi)
+    names = await _latest_names(db, lo, hi, agent_id)
     return [
         UsageAgentRow(
             agent_id=r.agent_id,

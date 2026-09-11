@@ -1,5 +1,8 @@
 /** 用量统计相关类型 */
 
+/** 时间粒度：日 / 月 / 年 */
+export type UsageGranularity = "day" | "month" | "year";
+
 /** 一段时间范围内的真实用量合计（不含估算行与失败行） */
 export interface UsageTotals {
   /** 问答次数：一次提问算一次（只数主回答调用） */
@@ -37,4 +40,22 @@ export interface UsageOverview {
   totals: UsageTotals;
   excluded: UsageExcluded;
   agents: UsageAgentRow[];
+}
+
+/** 时间序列上的一个时间桶（无数据时各计数为 0） */
+export interface UsagePoint {
+  bucket: string;
+  requests: number;
+  llm_calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
+/** 按日/月/年的时间序列，时间桶连续且已补零 */
+export interface UsageTimeseries {
+  granularity: UsageGranularity;
+  start: string;
+  end: string;
+  points: UsagePoint[];
 }

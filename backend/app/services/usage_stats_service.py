@@ -6,15 +6,36 @@
 """
 
 from datetime import date, datetime, time as dtime, timedelta
+from typing import Literal, Optional
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.llm_usage import LLMUsageLog
-from app.schemas.usage import UsageAgentRow, UsageExcluded, UsageOverview, UsageTotals
+from app.schemas.usage import (
+    UsageAgentRow,
+    UsageExcluded,
+    UsageOverview,
+    UsagePoint,
+    UsageTimeseries,
+    UsageTotals,
+)
 
 # 没有智能体归属的用量（如智能体配置测试）在报表里单独成行
 UNBOUND_AGENT_NAME = "未绑定智能体"
+
+# 时间粒度，以及各粒度对应的 ISO 前缀长度（created_at 是 ISO 字符串，可直接截取）
+Granularity = Literal["day", "month", "year"]
+GRANULARITIES: tuple = ("day", "month", "year")
+_KEY_LEN = {"day": 10, "month": 7, "year": 4}
+
+# 各粒度的默认区间长度
+DEFAULT_RANGE_DAYS = 30
+DEFAULT_RANGE_MONTHS = 12
+DEFAULT_RANGE_YEARS = 5
+
+# 单次查询允许的最大时间桶数：按日查十年应被拒绝，而不是硬算
+MAX_BUCKETS = 400
 
 
 def _range_bounds(start: date, end: date) -> tuple:
@@ -49,6 +70,112 @@ def _real_usage_filter(lo: str, hi: str) -> list:
         LLMUsageLog.is_estimated == False,  # noqa: E712
         *_range_filter(lo, hi),
     ]
+
+
+def bucket_of(iso_time: str, granularity: str) -> str:
+    """把一条记录的本地时间截成它所属的时间桶"""
+    return iso_time[: _KEY_LEN[granularity]]
+
+
+def _ensure_granularity(granularity: str) -> None:
+    """粒度是报表的对外契约，非法值统一在这里拒绝"""
+    if granularity not in GRANULARITIES:
+        raise ValueError(f"未知的时间粒度：{granularity}")
+
+
+def _bucket_count(start: date, end: date, granularity: Granularity) -> int:
+    if granularity == "day":
+        return (end - start).days + 1
+    if granularity == "month":
+        return (end.year * 12 + end.month) - (start.year * 12 + start.month) + 1
+    return end.year - start.year + 1
+
+
+def iter_buckets(start: date, end: date, granularity: Granularity) -> list:
+    """含首尾的时间桶序列；跨度超出上限时抛 ValueError"""
+    _ensure_granularity(granularity)
+    count = _bucket_count(start, end, granularity)
+    if count > MAX_BUCKETS:
+        raise ValueError(
+            f"时间跨度过大：{count} 个时间桶超过上限 {MAX_BUCKETS}，"
+            "请缩小范围或改用更粗的粒度"
+        )
+
+    if granularity == "day":
+        return [(start + timedelta(days=i)).isoformat() for i in range(count)]
+    if granularity == "month":
+        base = start.year * 12 + (start.month - 1)
+        return [f"{(base + i) // 12:04d}-{(base + i) % 12 + 1:02d}" for i in range(count)]
+    return [str(start.year + i) for i in range(count)]
+
+
+def resolve_range(
+    start: Optional[date],
+    end: Optional[date],
+    granularity: Granularity,
+    today: Optional[date] = None,
+) -> tuple:
+    """把可选的起止补成完整区间；缺省值按粒度给（日近 30 天 / 月近 12 个月 / 年近 5 年）"""
+    _ensure_granularity(granularity)
+    resolved_end = end or today or date.today()
+    if start is not None:
+        return start, resolved_end
+
+    if granularity == "day":
+        return resolved_end - timedelta(days=DEFAULT_RANGE_DAYS - 1), resolved_end
+    if granularity == "month":
+        base = resolved_end.year * 12 + (resolved_end.month - 1) - (DEFAULT_RANGE_MONTHS - 1)
+        return date(base // 12, base % 12 + 1, 1), resolved_end
+    return date(resolved_end.year - (DEFAULT_RANGE_YEARS - 1), 1, 1), resolved_end
+
+
+async def timeseries(
+    db: AsyncSession,
+    start: date,
+    end: date,
+    granularity: str,
+) -> UsageTimeseries:
+    """按粒度返回时间序列；没有数据的时间桶补 0，保证曲线连续"""
+    buckets = iter_buckets(start, end, granularity)  # 顺带校验粒度与跨度上限
+    lo, hi = _range_bounds(start, end)
+    bucket_col = func.substr(LLMUsageLog.created_at, 1, _KEY_LEN[granularity])
+
+    rows = (
+        await db.execute(
+            select(
+                bucket_col.label("bucket"),
+                func.count().label("llm_calls"),
+                _chat_requests_col().label("requests"),
+                _sum_of(LLMUsageLog.prompt_tokens).label("prompt_tokens"),
+                _sum_of(LLMUsageLog.completion_tokens).label("completion_tokens"),
+                _sum_of(LLMUsageLog.total_tokens).label("total_tokens"),
+            )
+            .where(*_real_usage_filter(lo, hi))
+            .group_by(bucket_col)
+        )
+    ).all()
+    by_bucket = {r.bucket: r for r in rows}
+
+    points = []
+    for bucket in buckets:
+        r = by_bucket.get(bucket)
+        points.append(
+            UsagePoint(
+                bucket=bucket,
+                requests=int(r.requests or 0) if r else 0,
+                llm_calls=int(r.llm_calls or 0) if r else 0,
+                prompt_tokens=int(r.prompt_tokens or 0) if r else 0,
+                completion_tokens=int(r.completion_tokens or 0) if r else 0,
+                total_tokens=int(r.total_tokens or 0) if r else 0,
+            )
+        )
+
+    return UsageTimeseries(
+        granularity=granularity,
+        start=start.isoformat(),
+        end=end.isoformat(),
+        points=points,
+    )
 
 
 async def overview(db: AsyncSession, start: date, end: date) -> UsageOverview:

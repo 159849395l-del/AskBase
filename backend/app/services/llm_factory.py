@@ -22,8 +22,13 @@ def build_chat_llm(
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
     streaming: bool = True,
+    stream_usage: Optional[bool] = None,
 ) -> ChatOpenAI:
-    """按显式配置构造 ChatOpenAI（纯函数，不查库）"""
+    """按显式配置构造 ChatOpenAI（纯函数，不查库）
+
+    stream_usage=True 时流式响应的最后一块会带上真实 token 用量。
+    该参数只会被底层库注入到流式请求里，非流式路径不会带（避免端点 400）。
+    """
     kwargs = {
         "model": model_id,
         "api_key": api_key or "sk-placeholder",
@@ -33,21 +38,24 @@ def build_chat_llm(
     }
     if max_tokens:
         kwargs["max_tokens"] = max_tokens
+    if streaming:
+        kwargs["stream_usage"] = settings.LLM_STREAM_USAGE if stream_usage is None else stream_usage
     return ChatOpenAI(**kwargs)
 
 
-def build_env_llm(streaming: bool = True) -> ChatOpenAI:
+def build_env_llm(streaming: bool = True, stream_usage: Optional[bool] = None) -> ChatOpenAI:
     """用 .env 配置构造 ChatOpenAI（兜底路径）"""
-    return ChatOpenAI(
-        model=settings.LLM_MODEL,
-        api_key=settings.LLM_API_KEY,
+    return build_chat_llm(
         base_url=settings.LLM_API_BASE,
+        api_key=settings.LLM_API_KEY,
+        model_id=settings.LLM_MODEL,
         temperature=settings.LLM_TEMPERATURE,
         streaming=streaming,
+        stream_usage=stream_usage,
     )
 
 
-def _build_from_orm(model, streaming: bool = True) -> ChatOpenAI:
+def _build_from_orm(model, streaming: bool = True, stream_usage: Optional[bool] = None) -> ChatOpenAI:
     """从 ORM 对象构造 ChatOpenAI（解密密钥）"""
     api_key = decrypt_password(model.api_key_encrypted or "")
     return build_chat_llm(
@@ -57,12 +65,18 @@ def _build_from_orm(model, streaming: bool = True) -> ChatOpenAI:
         temperature=model.temperature,
         max_tokens=model.max_tokens,
         streaming=streaming,
+        stream_usage=stream_usage,
     )
 
 
-async def resolve_llm(model_id: Optional[int] = None, streaming: bool = True) -> ChatOpenAI:
+async def resolve_llm(
+    model_id: Optional[int] = None,
+    streaming: bool = True,
+    stream_usage: Optional[bool] = None,
+) -> ChatOpenAI:
     """解析 LLM 客户端：model_id → 库内默认 → .env 兜底
 
+    stream_usage 传 False 可强制不带用量参数（兼容拒绝该参数的端点）。
     数据库相关异常一律降级到 .env，不让配置问题中断问答。
     """
     if model_id is None:
@@ -77,11 +91,11 @@ async def resolve_llm(model_id: Optional[int] = None, streaming: bool = True) ->
         try:
             model = await _load_model(model_id)
             if model is not None:
-                return _build_from_orm(model, streaming=streaming)
+                return _build_from_orm(model, streaming=streaming, stream_usage=stream_usage)
         except Exception as e:
             print(f"[llm_factory] 加载模型 {model_id} 失败，回退 .env 配置：{e}")
 
-    return build_env_llm(streaming=streaming)
+    return build_env_llm(streaming=streaming, stream_usage=stream_usage)
 
 
 async def _find_default_model_id() -> Optional[int]:
@@ -111,7 +125,11 @@ async def _load_model(model_id: int):
         ).scalar_one_or_none()
 
 
-def resolve_llm_sync(model_id: Optional[int] = None, streaming: bool = True) -> ChatOpenAI:
+def resolve_llm_sync(
+    model_id: Optional[int] = None,
+    streaming: bool = True,
+    stream_usage: Optional[bool] = None,
+) -> ChatOpenAI:
     """同步包装：在非 async 上下文里解析 LLM（内部新建事件循环）"""
     try:
         loop = asyncio.get_running_loop()
@@ -119,5 +137,5 @@ def resolve_llm_sync(model_id: Optional[int] = None, streaming: bool = True) -> 
         loop = None
     if loop is not None and loop.is_running():
         # 已在事件循环中：无法同步等待，直接回退 .env
-        return build_env_llm(streaming=streaming)
-    return asyncio.run(resolve_llm(model_id, streaming=streaming))
+        return build_env_llm(streaming=streaming, stream_usage=stream_usage)
+    return asyncio.run(resolve_llm(model_id, streaming=streaming, stream_usage=stream_usage))

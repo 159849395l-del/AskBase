@@ -9,6 +9,7 @@ from app.models.data_source import DataSource
 from app.models.knowledge_base import KnowledgeBase
 from app.models.qa_item import QAItem
 from app.models.db_table import DBTable, DBTableField, DBKnowledgePoint
+from app.models.llm_usage import LLMUsageLog
 
 __all__ = [
     "User",
@@ -23,4 +24,5 @@ __all__ = [
     "DBTable",
     "DBTableField",
     "DBKnowledgePoint",
+    "LLMUsageLog",
 ]

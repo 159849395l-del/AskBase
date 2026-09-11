@@ -28,6 +28,7 @@ import CrawlerResultPage from "./pages/CrawlerResultPage";
 // 大模型库 / AI 智能工具
 import ModelManagePage from "./pages/ModelManagePage";
 import AIToolsPage from "./pages/AIToolsPage";
+import UsageStatsPage from "./pages/UsageStatsPage";
 
 // 组件
 import ProtectedRoute from "./components/common/ProtectedRoute";
@@ -137,6 +138,14 @@ const App: React.FC = () => {
                 element={
                   <ProtectedRoute requireAdmin>
                     <AIToolsPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/admin/usage"
+                element={
+                  <ProtectedRoute requireAdmin>
+                    <UsageStatsPage />
                   </ProtectedRoute>
                 }
               />

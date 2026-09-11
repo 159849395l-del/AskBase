@@ -15,6 +15,7 @@ import {
   TeamOutlined,
   BulbOutlined,
   ToolOutlined,
+  BarChartOutlined,
 } from "@ant-design/icons";
 import { useNavigate, useLocation, Outlet } from "react-router-dom";
 import { useAuthStore } from "../../store/authStore";
@@ -70,6 +71,11 @@ const AppLayout: React.FC = () => {
             key: "/admin/tools",
             icon: <ToolOutlined />,
             label: "AI 智能工具",
+          },
+          {
+            key: "/admin/usage",
+            icon: <BarChartOutlined />,
+            label: "用量统计",
           },
           {
             key: "/admin/crawler/tasks",

@@ -14,6 +14,7 @@ from app.models.agent import Agent, AgentKnowledgeBase
 from app.core.dependencies import get_current_user
 from app.schemas.chat import MessageCreate
 from app.rag.chain import stream_rag_response
+from app.services.usage_service import UsageContext
 from app.config import settings
 from typing import List
 import json
@@ -117,9 +118,11 @@ async def send_message(
     system_prompt_saved = None
     model_id_saved = None
     tools_saved = []
+    agent_name_saved = None
     if conv.agent_id:
         agent = (await db.execute(select(Agent).where(Agent.id == conv.agent_id))).scalar_one_or_none()
         if agent:
+            agent_name_saved = agent.name
             system_prompt_saved = agent.system_prompt
             model_id_saved = agent.model_id
             # 从关联表取所有 kb_doc_id（用 agent 的限定；空列表=不限制,全库检索）
@@ -133,6 +136,13 @@ async def send_message(
     conv_id_saved = conv_id
     question_saved = body.content
     history_saved = chat_history
+    # 用量归属：在此定型并随生成器传递（智能体名称用写入当时的快照）
+    usage_ctx = UsageContext(
+        agent_id=conv.agent_id,
+        agent_name=agent_name_saved,
+        user_id=current_user.id,
+        conversation_id=conv_id,
+    )
 
     async def event_stream():
         full_response = ""
@@ -148,6 +158,7 @@ async def send_message(
                 last_msg_id=last_msg_id,
                 model_id=model_id_saved,
                 tools=tools_saved,
+                usage_ctx=usage_ctx,
             ):
                 if event["type"] == "token":
                     full_response += event["content"]
@@ -166,6 +177,9 @@ async def send_message(
                     yield f"event: tool_call\ndata: {json.dumps({'name': event['name'], 'content': event['content']}, ensure_ascii=False)}\n\n"
 
                 elif event["type"] == "done":
+                    # 真实 token 消耗；端点未返回用量时为 None，不用估算值冒充
+                    usage = event.get("usage")
+                    token_count = usage.total if usage else None
                     # Persist assistant message in a SEPARATE session to guarantee commit
                     async with async_session_factory() as save_db:
                         assistant_msg = Message(
@@ -173,14 +187,15 @@ async def send_message(
                             role="assistant",
                             content=full_response,
                             sources=json.dumps(sources, ensure_ascii=False),
-                            token_count=len(full_response),
+                            token_count=token_count,
                         )
                         save_db.add(assistant_msg)
                         await save_db.commit()
                         await save_db.refresh(assistant_msg)
                         msg_id = assistant_msg.id
 
-                    yield f"event: done\ndata: {json.dumps({'message_id': msg_id, 'token_count': len(full_response)}, ensure_ascii=False)}\n\n"
+                    # 与落库值保持一致：拿不到就是 null（前端按缺省处理），不发 0 冒充
+                    yield f"event: done\ndata: {json.dumps({'message_id': msg_id, 'token_count': token_count}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             if full_response:

@@ -378,6 +378,7 @@ async def get_or_create_agent_conversation(
 from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 from app.rag.chain import stream_rag_response
+from app.services.usage_service import UsageContext
 import json
 
 
@@ -407,6 +408,9 @@ async def test_agent(
                 system_prompt=body.system_prompt,
                 model_id=body.model_id,
                 tools=body.tools,
+                # 测试端点的消耗单列一类：它不是用户问答，不能计入「问答次数」
+                usage_ctx=UsageContext(user_id=admin_user.id),
+                usage_call_type="agent_test",
             ):
                 if event["type"] == "token":
                     yield f"event: token\ndata: {json.dumps({'token': event['content']}, ensure_ascii=False)}\n\n"

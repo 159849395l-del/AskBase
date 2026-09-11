@@ -23,12 +23,14 @@ from app.api.admin_users import router as admin_users_router
 from app.api.models import router as models_router
 from app.api.skills import router as skills_router
 from app.api.mcp_servers import router as mcp_servers_router
+from app.api.usage import router as usage_router
 
-# 新表依赖：确保 ORM 注册表包含 llm_models / skills / mcp_servers / agent_tools
+# 新表依赖：确保 ORM 注册表包含 llm_models / skills / mcp_servers / agent_tools / llm_usage_logs
 from app.models.llm_model import LLMModel  # noqa: F401
 from app.models.skill import Skill  # noqa: F401
 from app.models.mcp_server import MCPServer  # noqa: F401
 from app.models.agent import AgentTool  # noqa: F401
+from app.models.llm_usage import LLMUsageLog  # noqa: F401
 
 
 @asynccontextmanager
@@ -168,6 +170,7 @@ app.include_router(admin_users_router)
 app.include_router(models_router)
 app.include_router(skills_router)
 app.include_router(mcp_servers_router)
+app.include_router(usage_router)
 
 
 if __name__ == "__main__":

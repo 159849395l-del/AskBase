@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     LLM_API_BASE: str = "https://api.deepseek.com"
     LLM_MODEL: str = "deepseek-chat"
     LLM_TEMPERATURE: float = 0.3
+    # 流式请求是否带 usage 参数（百炼必须带才有用量；DeepSeek 带不带都返回）。
+    # 遇到严格校验该参数的兼容端点报 400 时，可置 false 兜底。
+    LLM_STREAM_USAGE: bool = True
 
     # === 联网搜索（Exa Answer，可选：填 key 后 web_search 优先走 Exa，失效自动回退百度/Bing） ===
     EXA_API_KEY: str = ""

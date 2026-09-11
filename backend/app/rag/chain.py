@@ -10,8 +10,14 @@ from app.rag.retriever import retrieve_with_scores
 from app.rag.query_rewriter import rewrite_query
 from app.rag.context_compressor import compress_history
 from app.services.llm_factory import resolve_llm
+from app.services.usage_service import UsageContext, TokenUsage, read_usage, record_call
 from app.schemas.agent import AgentToolRef
 from typing import AsyncIterator, Optional, Dict, Any, List
+import asyncio
+import time
+
+# 用量写入的耗时上限：采集是旁路，不能拖住回答收尾（如数据库锁等待）
+USAGE_WRITE_TIMEOUT_S = 3.0
 
 
 NO_RESULT_MESSAGE = "知识库中未找到相关资料，请尝试更换关键词或咨询管理员。"
@@ -59,6 +65,38 @@ SYSTEM_PROMPT_WITH_TOOLS = """你是一个智能问答助手。你的职责是�
 
 【参考文档】
 {context}"""
+
+
+# 端点拒绝用量参数时的报错特征（各家措辞不一，按关键词识别）
+_STREAM_OPTIONS_HINTS = ("stream_options", "include_usage")
+
+
+def _is_stream_options_rejection(exc: Exception) -> bool:
+    """判断异常是否指向「该端点不接受流式用量参数」"""
+    text = str(exc).lower()
+    return any(hint in text for hint in _STREAM_OPTIONS_HINTS)
+
+
+async def _astream_answer(llm, messages: list, model_id: Optional[int]):
+    """流式产出回答 chunk；端点拒绝用量参数时，去掉该参数重试一次。
+
+    只在**尚未产出任何 token** 时重试，避免重复计费与回答重影；
+    与用量参数无关的错误直接向上抛，不做无谓重试。
+    """
+    emitted = False
+    try:
+        async for chunk in llm.astream(messages):
+            emitted = True
+            yield chunk
+        return
+    except Exception as e:  # noqa: BLE001 — 仅确认是参数问题才降级
+        if emitted or not _is_stream_options_rejection(e):
+            raise
+        print(f"[chain] 端点不接受用量参数，去掉后重试一次：{e}")
+
+    fallback = await resolve_llm(model_id, stream_usage=False)
+    async for chunk in fallback.astream(messages):
+        yield chunk
 
 
 def _source_label(meta: dict) -> str:
@@ -212,6 +250,8 @@ async def stream_rag_response(
     last_msg_id: Optional[int] = None,
     model_id: Optional[int] = None,
     tools: Optional[List[AgentToolRef]] = None,
+    usage_ctx: Optional[UsageContext] = None,
+    usage_call_type: str = "chat",
 ) -> AsyncIterator[Dict[str, Any]]:
     # 有历史时绕过检索缓存，避免改写查询与裸查询串台
     history = chat_history or []
@@ -326,13 +366,44 @@ async def stream_rag_response(
             messages = messages + tool_messages
 
     full_response = ""
-    async for chunk in llm.astream(messages):
+    usage: Optional[TokenUsage] = None
+    model_name = getattr(llm, "model_name", None) or settings.LLM_MODEL
+    started_ms = int(time.time() * 1000)
+    # 仅在拿不到真实用量时才用得上，作为估算兜底的输入
+    prompt_text = "\n".join(str(getattr(m, "content", "")) for m in messages)
+
+    async for chunk in _astream_answer(llm, messages, model_id):
+        # 端点点形态不一：用量可能挂在最后一个内容块上（DeepSeek），
+        # 也可能是独立的空内容块（OpenAI / 百炼）。取任何非 null 的用量即可，
+        # 不要只认「choices 为空」那一种。后到的覆盖先到的。
+        usage = read_usage(chunk) or usage
         if chunk.content:
             full_response += chunk.content
             yield {"type": "token", "content": chunk.content}
 
+    # 用量采集：旁路写入。record_call 内部吞掉一切异常，这里再加一道耗时上限，
+    # 避免极端情况（如数据库锁等待）把回答的收尾一起拖住。
+    try:
+        await asyncio.wait_for(
+            record_call(
+                usage_ctx,
+                call_type=usage_call_type,
+                model_name=model_name,
+                model_id=model_id,
+                usage=usage,
+                input_text=prompt_text,
+                output_text=full_response,
+                duration_ms=int(time.time() * 1000) - started_ms,
+            ),
+            timeout=USAGE_WRITE_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        print("[chain] 用量写入超时，已跳过本次记录")
+
     yield {"type": "sources", "sources": sources}
-    yield {"type": "done", "full_response": full_response}
+    # usage 为 None 表示端点没返回真实用量：不拿估算值冒充，
+    # 上层据此不显示 token 数（气泡上的数字必须是真实消耗）
+    yield {"type": "done", "full_response": full_response, "usage": usage}
 
 
 async def _maybe_run_tools(llm, messages: list, tool_refs: list, kb_ids=None):

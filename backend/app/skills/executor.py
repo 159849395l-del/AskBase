@@ -4,6 +4,10 @@
 - MCP 工具：tool_type=mcp_tool，tool_ref 形如 "<server_id>:<tool_name>"
 
 工具在 LLM 侧的名称需要唯一，MCP 工具统一加 `mcp<server_id>_` 前缀，避免跨服务重名。
+
+来源编号：处理函数只知道自己那几条来源（文本里的 [N] 指 sources[N-1]），
+执行器知道「当前已经有几条来源」，由它统一改写成全局编号 ——
+回答正文里的 [来源N] 与来源面板里的第 N 条因此必然指向同一条。
 """
 
 import json
@@ -86,23 +90,76 @@ async def build_tool_specs(
     return specs, name_map
 
 
+def normalize_tool_result(raw: Any) -> Tuple[str, List[Dict[str, Any]]]:
+    """归一化处理函数返回值
+
+    - 返回 str：只有给 LLM 看的文本（大多数工具，行为与从前完全一致）
+    - 返回 (str, list)：文本 + 结构化来源（如联网搜索的网页）
+    """
+    if isinstance(raw, tuple) and len(raw) == 2:
+        text, sources = raw
+        return str(text), [s for s in (sources or []) if isinstance(s, dict)]
+    return str(raw), []
+
+
+def source_label(source: Dict[str, Any]) -> str:
+    """来源清单里显示的标题"""
+    return str(source.get("title") or source.get("filename") or source.get("url") or "来源")
+
+
+_CITATION_MARKER = re.compile(r"\[(\d{1,2})\]")
+
+
+def renumber_citations(text: str, own_source_count: int, offset: int) -> str:
+    """把工具文本里指向自己来源的 [N] 改写成全局编号 [来源offset+N]
+
+    只改写落在 1..own_source_count 内的编号：正文里的 [2024]、[9] 不是引用标记，不能误伤。
+    代价是「网页正文里恰好写成 [1]~[N] 的脚注」也会被改写 —— 换来的是外部服务
+    自带的编号一定能被换掉，这个取舍写进了 ADR-0002。
+    """
+
+    def _sub(match: re.Match) -> str:
+        n = int(match.group(1))
+        return f"[来源{offset + n}]" if 1 <= n <= own_source_count else match.group(0)
+
+    return _CITATION_MARKER.sub(_sub, text)
+
+
+def source_list_block(sources: List[Dict[str, Any]], offset: int) -> str:
+    """给模型看的来源清单：全局编号 + 标题 + 链接（模型据此在正文里引用）"""
+    lines = ["【可引用的来源】"]
+    for i, s in enumerate(sources, 1):
+        lines.append(f"[来源{offset + i}: {source_label(s)}]")
+        if s.get("url"):
+            lines.append(f"    {s['url']}")
+    return "\n".join(lines)
+
+
+def apply_source_offset(text: str, sources: List[Dict[str, Any]], offset: int) -> str:
+    """把工具结果改写成与来源面板同一套编号，并在末尾附上可引用清单"""
+    if not sources:
+        return text
+    numbered = renumber_citations(text, len(sources), offset)
+    return numbered + "\n\n" + source_list_block(sources, offset)
+
+
 async def execute_tool_call(
     db: AsyncSession, ref: AgentToolRef, arguments: Dict[str, Any],
     kb_ids: Optional[List[int]] = None,
-) -> str:
-    """执行单个工具调用，返回给 LLM 看的文本结果"""
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """执行单个工具调用，返回 (给 LLM 看的文本, 结构化来源列表)"""
     if ref.tool_type == "skill":
         result = await db.execute(select(Skill).where(Skill.id == ref.tool_ref_id))
         s = result.scalar_one_or_none()
         if s is None:
-            return "工具不存在或已被删除"
+            return "工具不存在或已被删除", []
         handler = get_handler(s.handler or s.name)
         if handler is None:
-            return "该工具没有可执行的处理函数"
+            return "该工具没有可执行的处理函数", []
         try:
-            return str(await handler(arguments or {}))
+            return normalize_tool_result(await handler(arguments or {}))
         except Exception as e:
-            return f"工具执行失败：{str(e)[:500]}"
+            return f"工具执行失败：{str(e)[:500]}", []
 
     if ref.tool_type == "mcp_tool" and ref.tool_ref:
         from app.services import mcp_service
@@ -111,25 +168,29 @@ async def execute_tool_call(
             server_id_str, tool_name = ref.tool_ref.split(":", 1)
             server_id = int(server_id_str)
         except (ValueError, IndexError):
-            return "MCP 工具引用格式错误"
+            return "MCP 工具引用格式错误", []
         try:
-            return await mcp_service.call_tool(db, server_id, tool_name, arguments or {})
+            # MCP 由外部服务返回纯文本，拿不到结构化来源 —— 不编造来源条目
+            return await mcp_service.call_tool(db, server_id, tool_name, arguments or {}), []
         except Exception as e:
             detail = getattr(e, "detail", None) or str(e)
-            return f"MCP 工具调用失败：{str(detail)[:500]}"
+            return f"MCP 工具调用失败：{str(detail)[:500]}", []
 
-    return "未知工具类型"
+    return "未知工具类型", []
 
 
 async def run_tool_calls(
     db: AsyncSession, tool_calls: List[Dict[str, Any]], name_map: Dict[str, AgentToolRef],
-    kb_ids: Optional[List[int]] = None,
+    kb_ids: Optional[List[int]] = None, source_offset: int = 0,
 ) -> List[Dict[str, Any]]:
     """批量执行 tool_calls，返回可直接作为 ToolMessage 的结果列表
 
-    每项形如 {"tool_call_id": ..., "name": ..., "content": ...}
+    每项形如 {"tool_call_id": ..., "name": ..., "content": ..., "sources": [...]}。
+    source_offset 是**已有的来源条数**（如知识库来源）：工具带出的网页来源接着
+    它往下编号，正文里的 [来源N] 与来源面板第 N 条因此是同一条。
     """
     results = []
+    offset = source_offset
     for call in tool_calls:
         # 兼容两种 tool_call 形态：
         #   OpenAI 原始格式: {"function": {"name", "arguments"(JSON字符串)}}
@@ -148,12 +209,14 @@ async def run_tool_calls(
             args = raw_args or {}
         ref = name_map.get(name)
         if ref is None:
-            content = f"未找到名为 {name} 的工具"
+            content, sources = f"未找到名为 {name} 的工具", []
         else:
-            content = await execute_tool_call(db, ref, args, kb_ids=kb_ids)
+            content, sources = await execute_tool_call(db, ref, args, kb_ids=kb_ids)
         results.append({
             "tool_call_id": call.get("id") or name,
             "name": name,
-            "content": content,
+            "content": apply_source_offset(content, sources, offset),
+            "sources": sources,
         })
+        offset += len(sources)
     return results

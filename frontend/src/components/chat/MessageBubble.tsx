@@ -6,6 +6,7 @@ import { UserOutlined, RobotOutlined } from "@ant-design/icons";
 import ReactMarkdown from "react-markdown";
 import type { MessageItem } from "../../types/chat";
 import SourceCitations from "./SourceCitations";
+import ToolCallsPanel from "./ToolCallsPanel";
 
 const { Text } = Typography;
 
@@ -68,6 +69,11 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
         {/* 引用来源 */}
         {!isUser && message.sources && message.sources.length > 0 && (
           <SourceCitations sources={message.sources} />
+        )}
+
+        {/* 工具调用留痕（刷新页面后依然在） */}
+        {!isUser && message.tool_calls && message.tool_calls.length > 0 && (
+          <ToolCallsPanel toolCalls={message.tool_calls} />
         )}
 
         {/* 时间戳 */}

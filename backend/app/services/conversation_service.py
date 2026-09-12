@@ -7,12 +7,52 @@ from sqlalchemy import select, func, desc
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException, status
 from typing import Optional, Tuple, List
+from app.database import async_session_factory
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.user import User
 from app.schemas.conversation import ConversationItem, ConversationDetail
-from app.schemas.chat import MessageItem, SourceItem
+from app.schemas.chat import MessageItem, SourceItem, ToolCallItem
 import json
+
+
+def _load_items(raw: Optional[str], item_type):
+    """把落库的 JSON 文本解析成列表项；坏数据降级为 None，不让会话详情接口 500
+
+    sources 与 tool_calls 是同一套做法（JSON 文本列 → 列表），只有元素类型不同。
+    """
+    if not raw:
+        return None
+    try:
+        return [item_type(**d) for d in json.loads(raw)]
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+async def save_assistant_message(
+    conv_id: int,
+    content: str,
+    sources: Optional[list] = None,
+    token_count: Optional[int] = None,
+    tool_calls: Optional[list] = None,
+) -> int:
+    """在独立会话中落库助手消息（保证提交），返回消息 id
+
+    用独立会话是刻意的：SSE 生成器跑在请求依赖之外，共用请求会话可能来不及提交。
+    """
+    async with async_session_factory() as db:
+        msg = Message(
+            conversation_id=conv_id,
+            role="assistant",
+            content=content,
+            sources=json.dumps(sources or [], ensure_ascii=False),
+            tool_calls=json.dumps(tool_calls, ensure_ascii=False) if tool_calls else None,
+            token_count=token_count,
+        )
+        db.add(msg)
+        await db.commit()
+        await db.refresh(msg)
+        return msg.id
 
 
 async def list_conversations(
@@ -110,18 +150,13 @@ async def get_conversation_detail(
 
     messages = []
     for msg in conv.messages:
-        sources = None
-        if msg.sources:
-            try:
-                sources = [SourceItem(**s) for s in json.loads(msg.sources)]
-            except (json.JSONDecodeError, TypeError):
-                sources = None
         messages.append(MessageItem(
             id=msg.id,
             conversation_id=msg.conversation_id,
             role=msg.role,
             content=msg.content,
-            sources=sources,
+            sources=_load_items(msg.sources, SourceItem),
+            tool_calls=_load_items(msg.tool_calls, ToolCallItem),
             token_count=msg.token_count,
             created_at=msg.created_at,
         ))

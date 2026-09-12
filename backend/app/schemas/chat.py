@@ -12,11 +12,28 @@ class MessageCreate(BaseModel):
 
 
 class SourceItem(BaseModel):
-    """知识库引用来源"""
+    """引用来源：知识库片段 / SQL / 网页，前端按 kind 分支渲染
+
+    只有 filename 是历史数据里一定有的；网页来源没有相似度、没有 chunk，
+    因此这些字段一律给默认值，不为了凑格式编造数字。
+    """
     filename: str
-    chunk_text: str
-    similarity_score: float
-    chunk_index: int
+    chunk_text: str = ""
+    similarity_score: float = 0.0
+    chunk_index: int = 0
+    kind: Optional[str] = None
+    title: Optional[str] = None
+    url: Optional[str] = None
+    snippet: Optional[str] = None
+    published: Optional[str] = None
+    score_type: Optional[str] = None
+    sql: Optional[str] = None
+
+
+class ToolCallItem(BaseModel):
+    """一次工具调用（用户可见的留痕：工具名 + 结果摘要）"""
+    name: str
+    content: str = ""
 
 
 class MessageItem(BaseModel):
@@ -25,6 +42,7 @@ class MessageItem(BaseModel):
     role: str
     content: str
     sources: Optional[List[SourceItem]] = None
+    tool_calls: Optional[List[ToolCallItem]] = None
     token_count: Optional[int] = None
     created_at: str
 

@@ -92,6 +92,14 @@ async def lifespan(app: FastAPI):
             if "duplicate column" not in str(e).lower():
                 raise
 
+        # 兼容迁移：messages 表加 tool_calls 列（工具调用留痕，JSON 文本）
+        try:
+            await conn.execute(text("ALTER TABLE messages ADD COLUMN tool_calls TEXT"))
+            print("[Startup] 已给 messages 表添加 tool_calls 列")
+        except Exception as e:
+            if "duplicate column" not in str(e).lower():
+                raise
+
     # 种子管理员账户 + 内置 Skill
     async with async_session_factory() as session:
         await seed_admin(session)

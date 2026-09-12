@@ -111,15 +111,22 @@ def _source_label(meta: dict) -> str:
     return meta.get("filename") or meta.get("source") or meta.get("title") or "未知文件"
 
 
-def format_docs_with_sources(docs_with_scores: list) -> tuple:
-    """Format retrieved docs into context string + sources list"""
+def format_docs_with_sources(docs_with_scores: list, start_index: int = 0) -> tuple:
+    """Format retrieved docs into context string + sources list
+
+    start_index 是**已有的来源条数**：SQL 来源先入列时，文档编号要接着它往下排，
+    否则上下文里会出现两个「来源1」，模型引用的编号就失去意义。
+    """
     context_parts = []
     sources = []
     for i, (doc, score) in enumerate(docs_with_scores):
         label = _source_label(doc.metadata)
-        source_label = f"[来源{i + 1}: {label}]"
+        source_label = f"[来源{start_index + i + 1}: {label}]"
         context_parts.append(f"{source_label}\n{doc.page_content}")
         sources.append({
+            # kind 是 CONTEXT.md 里四种引用来源之一，必须显式给出：
+            # 前端按它分支渲染（doc/sql/db_result/web），缺省会让网页分支的邻居失去标识
+            "kind": "doc",
             "filename": label,
             "source": doc.metadata.get("source", ""),
             "chunk_text": doc.page_content[:300],
@@ -313,7 +320,8 @@ async def stream_rag_response(
     context_parts = []
     if sql_result and sql_result.get("result_text"):
         # SQL 结果作为"参考文档"最前段（管理员 prompt 会规定如何组织回答）
-        label = f"[来源{len(sources)}: 数据库查询结果]"
+        # 编号必须等于它在 sources 里的位置（+1），否则与面板对不上
+        label = f"[来源{len(sources) + 1}: 数据库查询结果]"
         context_parts.append(f"{label}\n{sql_result['result_text']}")
         sources.append({
             "kind": "db_result",
@@ -337,7 +345,9 @@ async def stream_rag_response(
         # 判断权交给模型——时效类问题应由工具给出答案而非知识库
         context = ""
     else:
-        docs_context, doc_sources = format_docs_with_sources(docs_with_scores)
+        docs_context, doc_sources = format_docs_with_sources(
+            docs_with_scores, start_index=len(sources)
+        )
         context_parts.append(docs_context)
         sources.extend(doc_sources)
         context = "\n\n".join(p for p in context_parts if p)
@@ -358,7 +368,11 @@ async def stream_rag_response(
             "【工具使用规则】\n"
             "1. 你被授权使用若干工具。当参考文档不足以回答，或问题涉及时效信息、实时计算、外部知识时，调用合适的工具。\n"
             "2. 工具返回的结果可以信任，回答时请基于工具结果，并说明信息来源。\n"
-            "3. 不需要工具时不要调用，直接根据参考文档回答。"
+            "3. 工具结果里出现的 [来源N] 是全站统一编号，与界面来源列表的第 N 条一一对应；"
+            "回答时请原样引用这些编号，不要自己另起编号。\n"
+            "4. 只有 [来源N] 这一种编号可信。外部服务自带的编号（例如 [1]、[2]）没有对应的"
+            "界面来源，不要照抄进回答。\n"
+            "5. 不需要工具时不要调用，直接根据参考文档回答。"
         )
     messages = _build_messages(
         context, question, compressed_history, system_prompt=system_prompt,
@@ -367,14 +381,17 @@ async def stream_rag_response(
 
     # ---------- 工具调用（挂载了工具且模型支持时才启用） ----------
     if tool_refs:
-        tool_events, tool_messages = await _maybe_run_tools(
+        tool_events, tool_messages, tool_sources = await _maybe_run_tools(
             llm, messages, tool_refs, kb_ids=kb_ids,
             usage_ctx=usage_ctx, model_name=model_name,
+            source_offset=len(sources),
         )
         for evt in tool_events:
             yield evt
         if tool_messages:
             messages = messages + tool_messages
+        # 工具带出的网页来源并入同一份列表：位置即编号，与正文 [来源N] 对齐
+        sources.extend(tool_sources)
 
     full_response = ""
     usage: Optional[TokenUsage] = None
@@ -437,13 +454,17 @@ async def _maybe_run_tools(
     kb_ids=None,
     usage_ctx: Optional[UsageContext] = None,
     model_name: str = "",
+    source_offset: int = 0,
 ):
     """工具多轮调用循环：模型判断是否调用 → 执行 → 结果回填 → 再问，最多 3 轮。
 
     部分模型偶发发出空参数 / 参数不全的 tool_call（如 web_search 缺 query），
     把工具执行结果（含"缺少参数"错误）回填后让模型在下一轮修正或直接作答，
     避免"调用了一次失败就放弃"。
-    返回 (sse_events, tool_messages)。任何异常都静默降级为「不使用工具」。
+
+    source_offset 是调用前**已有的来源条数**（SQL / 知识库来源），工具来源接着它
+    编号，保证正文 [来源N] 与来源面板第 N 条是同一条。
+    返回 (sse_events, tool_messages, tool_sources)。任何异常都静默降级为「不使用工具」。
     """
     from langchain_core.messages import AIMessage, ToolMessage
     from app.database import async_session_factory
@@ -452,11 +473,12 @@ async def _maybe_run_tools(
     max_rounds = 3
     events: list = []
     tool_messages: list = []
+    tool_sources: list = []
     try:
         async with async_session_factory() as db:
             specs, name_map = await build_tool_specs(db, tool_refs)
             if not specs:
-                return [], []
+                return [], [], []
             llm_with_tools = llm.bind_tools(specs)
             # 记录每个工具调用真实的 name+args（给 LLM 看第二轮历史时用）
             call_records: list = []
@@ -472,14 +494,12 @@ async def _maybe_run_tools(
                 tool_calls = getattr(ai_msg, "tool_calls", None) or []
                 if not tool_calls:
                     break  # 模型不再调用工具（可能已直接给出答案）
-                results = await run_tool_calls(db, tool_calls, name_map, kb_ids=kb_ids)
+                # 偏移要算上**前面几轮工具**已经带出的来源，否则第二轮会和第一轮撞号
+                results = await run_tool_calls(
+                    db, tool_calls, name_map, kb_ids=kb_ids,
+                    source_offset=source_offset + len(tool_sources),
+                )
                 call_records.extend(results)
-                for r in results:
-                    events.append({
-                        "type": "tool_call",
-                        "name": r["name"],
-                        "content": r["content"][:500],
-                    })
                 # 本轮 AI 的工具调用请求 + 各工具结果，作为历史追加给下一轮
                 tool_messages.append(
                     AIMessage(
@@ -499,9 +519,22 @@ async def _maybe_run_tools(
                     tool_messages.append(
                         ToolMessage(content=r["content"], tool_call_id=r["tool_call_id"])
                     )
+                # 本轮全部就绪后才并入对外的产出：中途失败不会留下一半的来源，
+                # 否则面板上会出现模型根本没见过的「来源N」
+                for r in results:
+                    # 网页来源并入统一的 sources 列表（由调用方在 sources 事件里下发），
+                    # tool_call 事件只负责「调用了什么、拿到什么」
+                    tool_sources.extend(r.get("sources") or [])
+                    events.append({
+                        "type": "tool_call",
+                        "name": r["name"],
+                        "content": r["content"][:500],
+                    })
     except Exception as e:
-        # 模型调用本身的失败已由 metered_call 记过账；这里只负责降级
+        # 模型调用本身的失败已由 metered_call 记过账；这里只负责降级。
+        # 返回**已经跑完的轮次**的产出：第二轮才挂掉时，第一轮的网页来源与
+        # 工具留痕不该被一起丢掉。
         print(f"[chain] 工具调用失败，降级为不调用工具：{e}")
-        return [], []
+        return events, tool_messages, tool_sources
 
-    return events, tool_messages
+    return events, tool_messages, tool_sources

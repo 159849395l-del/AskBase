@@ -17,6 +17,7 @@ vi.mock("../api/chat", () => ({
 }));
 
 import * as conversationsApi from "../api/conversations";
+import * as chatApi from "../api/chat";
 
 describe("chatStore — 聊天状态管理", () => {
   beforeEach(() => {
@@ -26,6 +27,7 @@ describe("chatStore — 聊天状态管理", () => {
       messages: [],
       streamingContent: "",
       streamingSources: [],
+      streamingToolCalls: [],
       isStreaming: false,
       loadingConversations: false,
       abortController: null,
@@ -161,6 +163,64 @@ describe("chatStore — 聊天状态管理", () => {
       await useChatStore.getState().sendMessage("another message");
       // 状态不变
       expect(useChatStore.getState().messages).toHaveLength(0);
+    });
+
+    it("工具调用：与来源一起挂到助手消息上，刷新前后一致", async () => {
+      useChatStore.setState({ activeConversationId: 1 });
+      vi.mocked(chatApi.sendChatMessage).mockImplementation((_convId, _content, cbs) => {
+        cbs.onToken("春节放假 9 天 [来源2]。");
+        cbs.onToolCall?.({ name: "web_search", content: "【可引用的来源】" });
+        cbs.onSources([
+          {
+            kind: "web",
+            filename: "国务院通知",
+            title: "国务院通知",
+            url: "https://a.example/1",
+          },
+        ]);
+        cbs.onDone(42, 128);
+        return new AbortController();
+      });
+
+      await useChatStore.getState().sendMessage("2026年春节放假安排");
+
+      const assistant = useChatStore.getState().messages[1];
+      expect(assistant.content).toBe("春节放假 9 天 [来源2]。");
+      expect(assistant.tool_calls).toEqual([
+        { name: "web_search", content: "【可引用的来源】" },
+      ]);
+      expect(assistant.sources?.[0].url).toBe("https://a.example/1");
+      expect(assistant.token_count).toBe(128);
+    });
+
+    it("多次工具调用：按发生顺序全部保留", async () => {
+      useChatStore.setState({ activeConversationId: 1 });
+      vi.mocked(chatApi.sendChatMessage).mockImplementation((_convId, _content, cbs) => {
+        cbs.onToolCall?.({ name: "get_current_time", content: "2026-09-12 10:00:00" });
+        cbs.onToolCall?.({ name: "web_search", content: "【可引用的来源】" });
+        cbs.onDone(43, 10);
+        return new AbortController();
+      });
+
+      await useChatStore.getState().sendMessage("现在几点了");
+
+      expect(useChatStore.getState().messages[1].tool_calls?.map((t) => t.name)).toEqual([
+        "get_current_time",
+        "web_search",
+      ]);
+    });
+
+    it("没有调用工具：助手消息不带工具调用", async () => {
+      useChatStore.setState({ activeConversationId: 1 });
+      vi.mocked(chatApi.sendChatMessage).mockImplementation((_convId, _content, cbs) => {
+        cbs.onToken("直接回答");
+        cbs.onDone(44, 5);
+        return new AbortController();
+      });
+
+      await useChatStore.getState().sendMessage("你好");
+
+      expect(useChatStore.getState().messages[1].tool_calls).toEqual([]);
     });
   });
 

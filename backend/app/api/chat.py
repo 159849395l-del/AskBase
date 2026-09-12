@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
-from app.database import get_db, async_session_factory
+from app.database import get_db
 from app.models.user import User
 from app.models.conversation import Conversation
 from app.models.message import Message
@@ -14,6 +14,7 @@ from app.models.agent import Agent, AgentKnowledgeBase
 from app.core.dependencies import get_current_user
 from app.schemas.chat import MessageCreate
 from app.rag.chain import stream_rag_response
+from app.services.conversation_service import save_assistant_message
 from app.services.usage_service import UsageContext
 from app.config import settings
 from typing import List
@@ -147,6 +148,7 @@ async def send_message(
     async def event_stream():
         full_response = ""
         sources = []
+        tool_calls: list = []
 
         try:
             async for event in stream_rag_response(
@@ -173,41 +175,35 @@ async def send_message(
                     yield f"event: no_results\ndata: {json.dumps({'message': event['message']}, ensure_ascii=False)}\n\n"
 
                 elif event["type"] == "tool_call":
-                    # 工具调用过程：前端可展示"正在调用 XX 工具"
-                    yield f"event: tool_call\ndata: {json.dumps({'name': event['name'], 'content': event['content']}, ensure_ascii=False)}\n\n"
+                    # 工具调用过程：前端展示"调用了什么工具"，并随消息留痕
+                    tool_calls.append({"name": event["name"], "content": event["content"]})
+                    payload = {"name": event["name"], "content": event["content"]}
+                    yield f"event: tool_call\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
                 elif event["type"] == "done":
                     # 真实 token 消耗；端点未返回用量时为 None，不用估算值冒充
                     usage = event.get("usage")
                     token_count = usage.total if usage else None
                     # Persist assistant message in a SEPARATE session to guarantee commit
-                    async with async_session_factory() as save_db:
-                        assistant_msg = Message(
-                            conversation_id=conv_id_saved,
-                            role="assistant",
-                            content=full_response,
-                            sources=json.dumps(sources, ensure_ascii=False),
-                            token_count=token_count,
-                        )
-                        save_db.add(assistant_msg)
-                        await save_db.commit()
-                        await save_db.refresh(assistant_msg)
-                        msg_id = assistant_msg.id
+                    msg_id = await save_assistant_message(
+                        conv_id_saved,
+                        full_response,
+                        sources=sources,
+                        token_count=token_count,
+                        tool_calls=tool_calls,
+                    )
 
                     # 与落库值保持一致：拿不到就是 null（前端按缺省处理），不发 0 冒充
                     yield f"event: done\ndata: {json.dumps({'message_id': msg_id, 'token_count': token_count}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             if full_response:
-                async with async_session_factory() as save_db:
-                    assistant_msg = Message(
-                        conversation_id=conv_id_saved,
-                        role="assistant",
-                        content=full_response + f"\n\n[回答中断: {str(e)}]",
-                        sources=json.dumps(sources, ensure_ascii=False),
-                    )
-                    save_db.add(assistant_msg)
-                    await save_db.commit()
+                await save_assistant_message(
+                    conv_id_saved,
+                    full_response + f"\n\n[回答中断: {str(e)}]",
+                    sources=sources,
+                    tool_calls=tool_calls,
+                )
 
             yield f"event: error\ndata: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
 

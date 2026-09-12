@@ -345,12 +345,13 @@ def _patch_tool_executor(monkeypatch):
     async def fake_build_specs(db, tool_refs):
         return [{"type": "function", "function": {"name": "get_current_time"}}], {"get_current_time": "get_current_time"}
 
-    async def fake_run_tool_calls(db, tool_calls, name_map, kb_ids=None):
+    async def fake_run_tool_calls(db, tool_calls, name_map, kb_ids=None, source_offset=0):
         return [
             {
                 "tool_call_id": c.get("id", "call_1"),
                 "name": c.get("name", "get_current_time"),
                 "content": "2026-09-11 19:00:00",
+                "sources": [],
             }
             for c in tool_calls
         ]

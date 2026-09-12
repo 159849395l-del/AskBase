@@ -1,7 +1,7 @@
 /** 聊天状态管理 */
 
 import { create } from "zustand";
-import type { ConversationItem, MessageItem, SourceItem } from "../types/chat";
+import type { ConversationItem, MessageItem, SourceItem, ToolCallItem } from "../types/chat";
 import {
   listConversations,
   createConversation,
@@ -18,6 +18,7 @@ interface ChatState {
   messages: MessageItem[];
   streamingContent: string;
   streamingSources: SourceItem[];
+  streamingToolCalls: ToolCallItem[];
   isStreaming: boolean;
   loadingConversations: boolean;
   abortController: AbortController | null;
@@ -41,6 +42,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   streamingContent: "",
   streamingSources: [],
+  streamingToolCalls: [],
   isStreaming: false,
   loadingConversations: false,
   abortController: null,
@@ -62,7 +64,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   setActiveConversation: async (convId: number) => {
-    set({ activeConversationId: convId, messages: [], streamingContent: "", streamingSources: [] });
+    set({
+      activeConversationId: convId,
+      messages: [],
+      streamingContent: "",
+      streamingSources: [],
+      streamingToolCalls: [],
+    });
     try {
       const detail = await getConversation(convId);
       set({ messages: detail.messages, activeAgentId: detail.agent_id ?? null });
@@ -102,6 +110,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       isStreaming: true,
       streamingContent: "",
       streamingSources: [],
+      streamingToolCalls: [],
     });
 
     let fullContent = "";
@@ -117,6 +126,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         onSources: (sources) => {
           set({ streamingSources: sources });
         },
+        onToolCall: (tool) => {
+          set((s) => ({ streamingToolCalls: [...s.streamingToolCalls, tool] }));
+        },
         onDone: (messageId, tokenCount) => {
           const assistantMsg: MessageItem = {
             id: messageId,
@@ -124,12 +136,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
             role: "assistant",
             content: fullContent,
             sources: get().streamingSources,
+            tool_calls: get().streamingToolCalls,
             token_count: tokenCount,
             created_at: new Date().toISOString(),
           };
           set((s) => ({
             messages: [...s.messages, assistantMsg],
+            // 流式缓冲已转正到消息上，留着会让下一次提问前的状态对不上
             streamingContent: "",
+            streamingSources: [],
+            streamingToolCalls: [],
             isStreaming: false,
             abortController: null,
           }));
@@ -147,6 +163,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           set((s) => ({
             messages: [...s.messages, errorMsg],
             streamingContent: "",
+            streamingSources: [],
+            streamingToolCalls: [],
             isStreaming: false,
             abortController: null,
           }));
@@ -171,12 +189,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         role: "assistant",
         content: state.streamingContent + "\n\n[用户终止回复]",
         sources: state.streamingSources,
+        tool_calls: state.streamingToolCalls,
         created_at: new Date().toISOString(),
       };
       set((s) => ({
         messages: [...s.messages, partialMsg],
         streamingContent: "",
         streamingSources: [],
+        streamingToolCalls: [],
         isStreaming: false,
         abortController: null,
       }));
@@ -184,7 +204,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   clearMessages: () => {
-    set({ messages: [], streamingContent: "", streamingSources: [] });
+    set({ messages: [], streamingContent: "", streamingSources: [], streamingToolCalls: [] });
   },
 
   // 退出当前会话（回到智能体列表页时调用），清空激活状态与消息
@@ -195,6 +215,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       messages: [],
       streamingContent: "",
       streamingSources: [],
+      streamingToolCalls: [],
       isStreaming: false,
       abortController: null,
     });
@@ -208,6 +229,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       messages: [],
       streamingContent: "",
       streamingSources: [],
+      streamingToolCalls: [],
       isStreaming: false,
       abortController: null,
     });

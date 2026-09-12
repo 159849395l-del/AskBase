@@ -74,6 +74,16 @@ class TestFormatDocs:
 
         assert sources[0]["similarity_score"] == 0.1235
 
+    def test_指定起始偏移_编号接着已有来源(self):
+        """场景：前面已有 2 条来源（如 SQL 来源）→ 文档编号必须从来源3开始"""
+        doc = Document(page_content="内容A", metadata={"filename": "file_a.md", "chunk_index": 0})
+
+        context, sources = format_docs_with_sources([(doc, 0.9)], start_index=2)
+
+        assert "[来源3: file_a.md]" in context
+        assert "[来源1:" not in context
+        assert len(sources) == 1
+
     def test_缺少元数据_使用默认值(self):
         """场景：文档缺少部分元数据 → 使用默认值填充"""
         doc = Document(page_content="test content", metadata={})

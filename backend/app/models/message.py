@@ -28,6 +28,9 @@ class Message(Base):
     sources: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True
     )  # JSON string for assistant messages — 引用来源
+    tool_calls: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # JSON string for assistant messages — 工具调用留痕（刷新后仍可见）
     token_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[str] = mapped_column(
         String(30), nullable=False, default=_now

@@ -7,6 +7,7 @@ describe("sendChatMessage — 发送聊天消息", () => {
   const callbacks = {
     onToken: vi.fn(),
     onSources: vi.fn(),
+    onToolCall: vi.fn(),
     onDone: vi.fn(),
     onError: vi.fn(),
   };
@@ -172,6 +173,33 @@ describe("sendChatMessage — 发送聊天消息", () => {
       { id: 3, name: "商品FAQ", score: 0.91 },
     ]);
     expect(callbacks.onDone).toHaveBeenCalledWith(42, 128);
+    expect(callbacks.onError).not.toHaveBeenCalled();
+  });
+
+  it("SSE tool_call 事件：回调 onToolCall（工具名 + 结果摘要）", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => {
+          const chunk =
+            'event: tool_call\ndata: {"name":"web_search","content":"【可引用的来源】…"}\n\n';
+          return {
+            read: vi
+              .fn()
+              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode(chunk) })
+              .mockResolvedValueOnce({ done: true, value: undefined }),
+          };
+        },
+      },
+    });
+
+    sendChatMessage(1, "现在几点了", callbacks);
+    await flush();
+
+    expect(callbacks.onToolCall).toHaveBeenCalledWith({
+      name: "web_search",
+      content: "【可引用的来源】…",
+    });
     expect(callbacks.onError).not.toHaveBeenCalled();
   });
 

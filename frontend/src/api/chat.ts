@@ -1,10 +1,11 @@
 /** 聊天 API — SSE 流式问答 */
 
-import type { SourceItem } from "../types/chat";
+import type { SourceItem, ToolCallItem } from "../types/chat";
 
 export interface StreamCallbacks {
   onToken: (token: string) => void;
   onSources: (sources: SourceItem[]) => void;
+  onToolCall?: (tool: ToolCallItem) => void;
   onDone: (messageId: number, tokenCount: number) => void;
   onError: (error: string) => void;
 }
@@ -82,6 +83,9 @@ export function sendChatMessage(
                 break;
               case "sources":
                 callbacks.onSources(parsed.sources);
+                break;
+              case "tool_call":
+                callbacks.onToolCall?.({ name: parsed.name, content: parsed.content });
                 break;
               case "done":
                 callbacks.onDone(parsed.message_id, parsed.token_count || 0);

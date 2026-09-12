@@ -13,6 +13,7 @@ from app.schemas.skill import (
     SkillItem,
     SkillTestResponse,
 )
+from app.skills.executor import normalize_tool_result
 from app.skills.registry import get_handler
 
 
@@ -120,7 +121,8 @@ async def test_skill(
             message="该工具没有可执行的处理函数（自定义工具暂不支持执行）",
         )
     try:
-        result = await handler(arguments or {})
-        return SkillTestResponse(success=True, result=str(result))
+        # 工具可能返回 (文本, 来源)：管理员测试只要文本，来源在这里没有意义
+        text, _sources = normalize_tool_result(await handler(arguments or {}))
+        return SkillTestResponse(success=True, result=text)
     except Exception as e:
         return SkillTestResponse(success=False, message=str(e)[:500])

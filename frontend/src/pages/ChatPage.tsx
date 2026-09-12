@@ -19,6 +19,7 @@ const ChatPage: React.FC = () => {
   const navigate = useNavigate();
   const messages = useChatStore((s) => s.messages);
   const streamingContent = useChatStore((s) => s.streamingContent);
+  const streamingToolCalls = useChatStore((s) => s.streamingToolCalls);
   const isStreaming = useChatStore((s) => s.isStreaming);
   const activeConversationId = useChatStore((s) => s.activeConversationId);
   const activeAgentId = useChatStore((s) => s.activeAgentId);
@@ -230,21 +231,22 @@ const ChatPage: React.FC = () => {
             <MessageBubble key={msg.id} message={msg} />
           ))}
 
-          {/* 流式输出中的消息 */}
-          {isStreaming && streamingContent && (
+          {/* 流式输出中的消息：调工具时正文还是空的，也要让用户看见过程 */}
+          {isStreaming && (streamingContent || streamingToolCalls.length > 0) && (
             <MessageBubble
               message={{
                 id: 0,
                 conversation_id: activeConversationId || 0,
                 role: "assistant",
                 content: streamingContent,
+                tool_calls: streamingToolCalls,
                 created_at: new Date().toISOString(),
               }}
             />
           )}
 
           {/* 打字指示器 */}
-          {isStreaming && !streamingContent && (
+          {isStreaming && !streamingContent && streamingToolCalls.length === 0 && (
             <div style={{ textAlign: "center", padding: 16 }}>
               <Text type="secondary">
                 <span className="typing-dots">AI 正在思考</span>...

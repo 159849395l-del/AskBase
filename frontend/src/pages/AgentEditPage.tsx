@@ -380,13 +380,10 @@ const AgentEditPage: React.FC = () => {
             <Form.Item
               name="model_id"
               label="使用模型"
-              extra="不选则使用大模型库中的默认模型；未配置任何模型时回退 .env 配置"
+              rules={[{ required: true, message: "请为该智能体选择模型" }]}
+              extra="每个智能体都必须绑定一个模型，没有系统默认"
             >
-              <Select
-                placeholder="系统默认模型"
-                options={modelOptions}
-                allowClear
-              />
+              <Select placeholder="请选择模型" options={modelOptions} />
             </Form.Item>
 
             <Form.Item

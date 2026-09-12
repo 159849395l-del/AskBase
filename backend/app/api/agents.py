@@ -14,6 +14,7 @@ from app.core.dependencies import get_current_user, get_admin_user
 from app.models.user import User
 from app.models.agent import Agent, AgentKnowledgeBase, AgentTool
 from app.models.knowledge_document import KnowledgeDocument
+from app.models.llm_model import LLMModel
 from app.schemas.agent import (
     AgentItem,
     AgentDetail,
@@ -75,6 +76,24 @@ async def _load_tools(db: AsyncSession, agent_id: int) -> List[AgentToolRef]:
             if sid in valid_mcp_ids:
                 tools.append(AgentToolRef(tool_type="mcp_tool", tool_ref=r.tool_ref, enabled=r.enabled))
     return tools
+
+
+async def _validate_model(db: AsyncSession, model_id: int) -> None:
+    """智能体必须绑定一个可用模型：不存在或已停用都直接拒绝
+
+    这里刻意不做「留空则用默认模型」的兼容：智能体不再有系统默认这一说。
+    """
+    model = (
+        await db.execute(select(LLMModel).where(LLMModel.id == model_id))
+    ).scalar_one_or_none()
+    if model is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="所选模型不存在"
+        )
+    if not model.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="所选模型已停用，请换一个"
+        )
 
 
 async def _to_item(
@@ -233,6 +252,9 @@ async def create_agent(
     admin_user: User = Depends(get_admin_user),
 ):
     """创建智能体（仅管理员）"""
+    # 每个智能体都必须绑定一个可用模型
+    await _validate_model(db, body.model_id)
+
     # 校验 kb_ids 都存在 + 数据库型 ≤ 1
     await _validate_kb_ids(db, body.kb_ids)
 
@@ -276,6 +298,14 @@ async def update_agent(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="智能体不存在")
 
     data = body.model_dump(exclude_unset=True)
+    # 智能体必须绑定模型：显式传 null 视为非法（不再支持清空为系统默认）
+    if "model_id" in data:
+        if data["model_id"] is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="必须为智能体选择模型，不支持清空",
+            )
+        await _validate_model(db, data["model_id"])
     kb_ids_update = data.pop("kb_ids", None)
     data.pop("tools", None)
     # 注意：tools 必须取 body 上的原始对象，model_dump 会把它降级成 dict

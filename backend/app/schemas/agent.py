@@ -29,7 +29,7 @@ class AgentCreate(AgentBase):
     """创建智能体（管理员）"""
 
     kb_ids: List[int] = Field(default_factory=list, description="关联的知识库 ID 列表（数据库型 KB 最多 1 个）")
-    model_id: Optional[int] = Field(None, description="绑定的大模型 ID（NULL=系统默认）")
+    model_id: int = Field(..., description="绑定的大模型 ID（必填：每个智能体都必须有明确的模型）")
     tools: List[AgentToolRef] = Field(default_factory=list, description="挂载的工具列表")
 
 
@@ -45,7 +45,9 @@ class AgentUpdate(BaseModel):
     is_hidden: Optional[bool] = None
     sort_order: Optional[int] = None
     kb_ids: Optional[List[int]] = Field(None, description="若提供则全量替换关联的知识库")
-    model_id: Optional[int] = Field(None, description="绑定的大模型 ID（NULL=系统默认）")
+    model_id: Optional[int] = Field(
+        None, description="绑定的大模型 ID；不传=保持不变，传 null 会被拒绝（不支持清空）"
+    )
     tools: Optional[List[AgentToolRef]] = Field(None, description="若提供则全量替换挂载的工具")
 
 
